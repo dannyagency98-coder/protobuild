@@ -173,6 +173,21 @@ function applyProposal(job, body) {
     writeEdits(job.id, rows);
     return;
   }
+  if (body.kind === 'html' && body.html && !body.find) {
+    const next = String(body.html);
+    if (/<script|javascript:|onerror\s*=|onload\s*=/i.test(next)) {
+      const error = new Error('Script is not allowed.');
+      error.status = 400;
+      throw error;
+    }
+    const htmlPath = path.join(siteDir(job.id), 'index.html');
+    const before = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
+    fs.writeFileSync(htmlPath, next);
+    const rows = readEdits(job.id);
+    rows.push({ type: 'snapshot', before });
+    writeEdits(job.id, rows.slice(-8));
+    return;
+  }
   if (body.kind === 'html') {
     const findText = String(body.find || '');
     const next = String(body.replace || '');
@@ -633,7 +648,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/agent') {
-    const body = JSON.parse((await readBody(req, 200000)).toString('utf8') || '{}');
+    const body = JSON.parse((await readBody(req, 8000000)).toString('utf8') || '{}');
     const origin = originOf(req);
     const active = body.activeJobId ? await jobs.getJob(body.activeJobId, user.id) : null;
     const started = [];
@@ -650,6 +665,8 @@ async function handleApi(req, res, url) {
       result = await runTurn({
         message: body.message,
         purpose: body.purpose,
+        history: body.history,
+        images: body.images,
         activeJob: active,
         onEvent: (event) => {
           if (event.type === 'token') send('token', { text: event.text });
@@ -853,8 +870,9 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, jobs.publicJob(updated || { ...job, share_token: null }, originOf(req)));
       }
       const token = job.share_token || crypto.randomBytes(12).toString('hex');
-      let expires = null;
-      expires = new Date(Date.now() + shareDays() * 86400000).toISOString();
+      const days = Number(body.expiresInDays);
+      const span = days === 0 ? 0 : days === 30 ? 30 : 7;
+      const expires = span ? new Date(Date.now() + span * 86400000).toISOString() : null;
       const map = jobs.shares();
       map[token] = { jobId: id, expiresAt: expires };
       jobs.saveShares(map);

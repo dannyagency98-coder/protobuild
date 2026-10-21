@@ -17,7 +17,10 @@ export async function currentUser(request, env) {
 export function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
   });
 }
 
@@ -111,4 +114,57 @@ export async function queueCapture(env, user, body) {
     return json({ error: 'The capture workflow did not start.' }, 502);
   }
   return json({ id: created.id, status: 'queued', source_url: url, mode, user_id: user.id, created_at: created.created_at });
+}
+
+export async function queueUpload(env, user, file) {
+  if (!env.R2) return json({ error: 'R2 is not connected, so this deploy cannot store a capture.' }, 503);
+  const name = String(file.name || 'upload.html');
+  const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  if (!['.html', '.htm', '.zip'].includes(ext)) return json({ error: 'Only .html or .zip files' }, 400);
+  const bytes = await file.arrayBuffer();
+  if (!bytes.byteLength) return json({ error: 'Choose an .html or .zip file' }, 400);
+  const id = crypto.randomUUID();
+  const created = {
+    id,
+    user_id: user.id,
+    source_url: name,
+    mode: 'upload',
+    options: {},
+    status: ext === '.zip' ? 'queued' : 'done',
+    error: null,
+    stats: {},
+    share_token: null,
+    share_expires_at: null,
+    rights_confirmed: true,
+    created_at: new Date().toISOString(),
+    finished_at: ext === '.zip' ? null : new Date().toISOString(),
+  };
+  const key = ext === '.zip' ? `sites/${id}/source.zip` : `sites/${id}/index.html`;
+  const type = ext === '.zip' ? 'application/zip' : 'text/html; charset=utf-8';
+  await env.R2.put(key, bytes, { httpMetadata: { contentType: type } });
+  await putJob(env, created);
+  await rememberJob(env, user.id, id);
+  if (ext !== '.zip') return json(created);
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) {
+    return json({ error: 'GitHub Actions is not configured, so a zip still has to be unpacked on this computer.' }, 503);
+  }
+  const workflow = env.GITHUB_WORKFLOW_FILE || 'capture.yml';
+  const dispatched = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'protobuild',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ref: env.GITHUB_REF || 'main',
+      inputs: { job_id: id, mode: 'upload', url: '', options: '{}' },
+    }),
+  });
+  if (dispatched.status !== 204) {
+    await putJob(env, { ...created, status: 'failed', error: 'The capture workflow did not start.', finished_at: new Date().toISOString() });
+    return json({ error: 'The capture workflow did not start.' }, 502);
+  }
+  return json(created);
 }

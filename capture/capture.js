@@ -278,8 +278,68 @@ function readUploadedHtml(src) {
   return fs.readFileSync(index, 'utf8');
 }
 
+async function downloadR2(key, dest) {
+  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_BUCKET) return false;
+  const client = new S3Client({
+    region: 'auto',
+    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  try {
+    const got = await client.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    const bytes = Buffer.from(await got.Body.transformToByteArray());
+    fs.writeFileSync(dest, bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyLinkedPages(page, sourceUrl) {
+  const links = await page.evaluate(() => {
+    const host = location.host;
+    const hrefs = [];
+    for (const a of document.querySelectorAll('a[href]')) {
+      try {
+        const next = new URL(a.href, location.href);
+        if (next.host !== host || !/^https?:$/.test(next.protocol)) continue;
+        hrefs.push(next.href.split('#')[0]);
+      } catch { /* skip */ }
+    }
+    return hrefs;
+  }).catch(() => []);
+  const product = links.find((href) => /\/products?\//i.test(href) || /\/shop\//i.test(href));
+  const collection = links.find((href) => /\/collections?\//i.test(href) && href !== product);
+  const saved = [];
+  ensureDir(path.join(OUT_DIR, 'pages'));
+  let n = 0;
+  for (const href of [product, collection].filter(Boolean)) {
+    n += 1;
+    try {
+      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.waitForTimeout(700);
+      fs.writeFileSync(path.join(OUT_DIR, 'pages', `${n}.html`), await page.content());
+      saved.push({ url: href, local: `pages/${n}.html` });
+    } catch { /* a linked page can fail without failing the main copy */ }
+  }
+  if (saved.length) {
+    try { await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }); } catch { /* stay on the last page */ }
+  }
+  return saved;
+}
+
 async function processUpload() {
-  const src = OPTIONS.uploadPath;
+  let src = OPTIONS.uploadPath;
+  if (!src || !fs.existsSync(src)) {
+    ensureDir(OUT_DIR);
+    const zipDest = path.join(OUT_DIR, 'source.zip');
+    const htmlDest = path.join(OUT_DIR, 'source.html');
+    if (await downloadR2(`sites/${JOB_ID}/source.zip`, zipDest)) src = zipDest;
+    else if (await downloadR2(`sites/${JOB_ID}/source.html`, htmlDest)) src = htmlDest;
+  }
   if (!src || !fs.existsSync(src)) throw new Error('Upload file missing');
   ensureDir(OUT_DIR);
   ensureDir(ASSETS_DIR);
@@ -316,6 +376,7 @@ async function main() {
 
   let images = [];
   let totalSize = 0;
+  let extraPages = [];
   const warnings = [];
   let sourceUrl = URL_TO_CAPTURE || OPTIONS.source_url || '';
   note('opening', sourceUrl || 'saved file');
@@ -449,6 +510,32 @@ async function main() {
     await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
     await page.waitForTimeout(900);
 
+    const consentSelectors = [
+      '#onetrust-accept-btn-handler',
+      '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+      '#CybotCookiebotDialogBodyButtonAccept',
+      '.cc-allow', '.cc-btn.cc-allow', '.cc-dismiss',
+      '#cookieyes-consent .cky-btn-accept',
+      '.cky-btn-accept',
+      '#didomi-notice-agree-button',
+      '.qc-cmp2-summary-buttons button',
+      '[aria-label*="accept" i]',
+      '[id*="accept" i]',
+    ];
+    for (const sel of consentSelectors) {
+      try {
+        await page.locator(sel).first().click({ timeout: 400 });
+        break;
+      } catch {}
+    }
+    for (const text of ['Accept all', 'Accept All', 'Allow all', 'Allow All', 'Agree', 'I agree', 'Got it', 'OK', 'Accept']) {
+      try {
+        await page.getByRole('button', { name: new RegExp(`^${text}$`, 'i') }).first().click({ timeout: 500 });
+        break;
+      } catch {}
+    }
+    await page.waitForTimeout(1200);
+
     async function wallKind() {
       const title = (await page.title()).toLowerCase();
       const sample = (await page.evaluate(() => (document.body?.innerText || '').slice(0, 900))).toLowerCase();
@@ -477,19 +564,6 @@ async function main() {
       await fail('This site refused the scanner with Access Denied. Open it in your own browser, save the page, and drop that file in the chat.', 'blocked');
     }
 
-    for (const sel of ['#onetrust-accept-btn-handler', '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', '.cc-allow', '.cc-btn.cc-allow', '[aria-label*="accept" i]']) {
-      try {
-        await page.locator(sel).first().click({ timeout: 500 });
-        break;
-      } catch {}
-    }
-    for (const text of ['Accept all', 'Accept', 'Agree', 'Allow all', 'Got it', 'I agree', 'OK']) {
-      try {
-        await page.getByRole('button', { name: new RegExp(`^${text}$`, 'i') }).first().click({ timeout: 700 });
-        break;
-      } catch {}
-    }
-
     const actions = Array.isArray(OPTIONS.actions) ? OPTIONS.actions : [];
     for (const action of actions) {
       try {
@@ -507,6 +581,11 @@ async function main() {
           await page.setViewportSize({ width: Number(action.width), height: Number(action.height) || 900 });
         }
       } catch {}
+    }
+
+    if (OPTIONS.crawl && MODE === 'clone') {
+      extraPages = await copyLinkedPages(page, sourceUrl);
+      if (extraPages.length) warnings.push(`Also copied ${extraPages.length} page${extraPages.length === 1 ? '' : 's'} from the live links.`);
     }
 
     note('scrolling', 'Loading images that appear further down the page');
@@ -784,6 +863,7 @@ async function main() {
       imageCount: listed.length,
       totalMB: +(totalSize / 1024 / 1024).toFixed(2),
       warnings,
+      pages: extraPages,
       elapsedMs: Date.now() - started,
       images: listed.slice(0, 400),
     };

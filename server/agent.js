@@ -457,7 +457,7 @@ async function runAgent({ message, history, activeJob, pageText, image, onEvent,
     role: item.role === 'ai' || item.role === 'assistant' ? 'assistant' : 'user',
     content: String(item.text || item.content || '').slice(0, 4000),
   })).filter((item) => item.content);
-  const page = String(pageText || '').slice(0, 14000);
+  const page = String(pageText || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
   const system = [
     'You are Protobuild. You copy a public page into a local preview and edit that copy.',
     'Call the tools when the user wants something done. More than one tool per message is normal.',
@@ -468,7 +468,7 @@ async function runAgent({ message, history, activeJob, pageText, image, onEvent,
     'reset undoes one accepted edit. Pass all true only for a full return to the original capture.',
     'Do not scan when they said not to.',
     'Write a full answer when they ask. Do not stop after a sentence if they asked for an explanation or a code change.',
-    page ? `Open page text:\n${page}` : 'No page is open yet.',
+    page ? `Open page outline:\n${page.slice(0, 1200)}` : 'No page is open yet.',
   ].join('\n');
   const messages = [
     { role: 'system', content: system },

@@ -12,5 +12,11 @@
       "binding": "R2",
       "bucket_name": "prototype-builder"
     }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "GEMINI_KV",
+      "id": "a2534035e36341d0b1856bd44f1c6836"
+    }
   ]
 }

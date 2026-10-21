@@ -1,7 +1,7 @@
-import { currentUser, forgetJob, json, listStoredIds, queueCapture, readStoredJob } from '../lib/edge.js';
+import { currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob } from '../lib/edge.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
-import { applyReplacements } from '../lib/edit.js';
+import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
 
 const PAGES_USER_ID = '6f0c1a2e-7b34-4d15-8a10-000000000001';
 
@@ -37,6 +37,21 @@ export async function onRequest(context) {
   if (jobAction && jobAction[2] === 'stop' && request.method === 'POST') {
     return stopJob(env, user, jobAction[1]);
   }
+  if (jobAction && jobAction[2] === 'share' && request.method === 'POST') {
+    return shareJob(request, env, user, jobAction[1]);
+  }
+  if (jobAction && jobAction[2] === 'apply' && request.method === 'POST') {
+    return applyJob(request, env, user, jobAction[1]);
+  }
+  if (jobAction && jobAction[2] === 'undo' && request.method === 'POST') {
+    return undoJob(env, user, jobAction[1]);
+  }
+  if (jobAction && jobAction[2] === 'logo' && request.method === 'POST') {
+    return logoJob(request, env, user, jobAction[1]);
+  }
+  if (jobAction && jobAction[2] === 'host' && request.method === 'POST') {
+    return json({ error: 'Use the share link. Publishing a capture as its own site is not connected on this deploy.' }, 501);
+  }
   if (jobAction && !jobAction[2] && request.method === 'DELETE') {
     return removeJob(env, user, jobAction[1]);
   }
@@ -58,6 +73,26 @@ export async function onRequest(context) {
       if (job && job.user_id === user.id) jobs.push(publicJob(env, job));
     }
     return json({ jobs });
+  }
+
+  if (request.method === 'GET' && path.endsWith('/config')) {
+    return json({
+      hosted: true,
+      maxPromptsPerDay: Number(env.MAX_PROMPTS_PER_DAY) || 1500,
+      previewTTLDays: 30,
+    });
+  }
+
+  if (request.method === 'POST' && path.endsWith('/upload')) {
+    const form = await request.formData().catch(() => null);
+    const file = form?.get('file');
+    const rights = String(form?.get('rights_confirmed') || '');
+    if (rights !== 'true' && rights !== 'on') return json({ error: 'Rights confirmation required' }, 400);
+    if (!file || typeof file.arrayBuffer !== 'function') return json({ error: 'Choose an .html or .zip file' }, 400);
+    const queued = await queueUpload(env, user, file);
+    const payload = await queued.json();
+    if (!queued.ok) return json(payload, queued.status);
+    return json(publicJob(env, payload));
   }
 
   if (request.method === 'POST' && path.endsWith('/agent')) {
@@ -89,11 +124,52 @@ function firstUrl(text) {
   return bare ? `https://${bare[0].replace(/[.,]$/, '')}` : '';
 }
 
+function priorMessages(history) {
+  return (Array.isArray(history) ? history : []).slice(-8).map((item) => ({
+    role: item.role === 'ai' || item.role === 'assistant' ? 'assistant' : 'user',
+    content: String(item.text || item.content || '').replace(/\s+/g, ' ').trim().slice(0, 500),
+  })).filter((item) => item.content);
+}
+
+function userContent(message, images) {
+  const text = String(message || '').trim() || 'Use the attached image as a reference.';
+  const pics = (Array.isArray(images) ? images : []).slice(0, 3).filter((url) => /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(String(url)) && String(url).length < 2000000);
+  if (!pics.length) return text;
+  return [{ type: 'text', text }, ...pics.map((url) => ({ type: 'image_url', image_url: { url } }))];
+}
+
+function captureOptions(message) {
+  const lower = String(message || '').toLowerCase();
+  const options = { crawl: /\bcrawl\b|\balso copy\b|\bproduct page\b|\bcollection page\b/.test(lower) };
+  if (/\bmobile\b|\bphone\b/.test(lower)) options.viewport = 'mobile';
+  if (/\bfooter\b|\bscroll\b/.test(lower)) options.actions = [{ type: 'scroll', to: /footer/.test(lower) ? 'footer' : 'bottom' }];
+  return options;
+}
+
+function withOutline(content, outline) {
+  const lead = `Page outline:\n${outline}\n\nRequest: `;
+  if (typeof content === 'string') return `${lead}${content}`;
+  return content.map((part) => part.type === 'text' ? { ...part, text: `${lead}${part.text}` } : part);
+}
+
+function visiblePage(html) {
+  return String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200);
+}
+
 async function handleAgent(request, env, user) {
   const body = await request.json().catch(() => ({}));
   const message = String(body.message || '');
   const purpose = body.purpose || '';
   const jobId = body.activeJobId || '';
+  const history = priorMessages(body.history);
+  const content = userContent(message, body.images);
+
+  if (purpose !== 'ready') {
+    const usage = await bumpUsage(env, user.id);
+    if (!usage.ok) {
+      return sse({ reply: `The daily chat cap of ${usage.cap} is used up. It resets tomorrow.`, job: null });
+    }
+  }
 
   if (purpose === 'ready' && jobId) {
     const job = await loadJob(env, user.id, jobId);
@@ -103,7 +179,7 @@ async function handleAgent(request, env, user) {
       const turn = await answer(env, [
         { role: 'system', content: 'Reply with one short sentence only. Example: nike.com is in the preview.' },
         { role: 'user', content: `${host} finished copying and is in the preview.` },
-      ], 60);
+      ], 80);
       const reply = (turn.text || `${host} is in the preview.`).trim().split('\n')[0];
       return sse({ reply, job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
     } catch (err) {
@@ -114,17 +190,44 @@ async function handleAgent(request, env, user) {
   const url = firstUrl(message);
   if (url && purpose !== 'edit') {
     const mode = /\bimages?\s*only\b|\bonly images\b/i.test(message) ? 'images' : 'clone';
-    const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: {} });
+    const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) });
     const payload = await queued.json();
     if (!queued.ok) return sse({ reply: payload.error || 'That link was not copied.', job: null });
     return sse({ reply: `Copying ${hostOf(payload.source_url)}.`, job: publicJob(env, payload), pendingLine: true });
   }
 
+  if (jobId && /\b(share|live link)\b/i.test(message)) {
+    const job = await loadJob(env, user.id, jobId);
+    if (!job) return sse({ reply: 'That capture is gone.', job: null });
+    if (job.status !== 'done') return sse({ reply: 'The page is still copying. The link can be made when the preview is ready.', job: publicJob(env, job) });
+    const days = /\b30\b/.test(message) ? 30 : /\bnever\b/i.test(message) ? 0 : 7;
+    const next = await setShare(env, job, { enabled: !/\b(off|revoke|stop)\b/i.test(message), days });
+    await saveJob(env, next);
+    const link = shareLive(next) ? `/share/${next.share_token}/` : '';
+    return sse({ reply: link ? `Live link: ${link}` : 'The live link is off.', job: publicJob(env, next), shareUrl: link });
+  }
+
+  if (jobId && /\b(download|zip)\b/i.test(message)) {
+    const job = await loadJob(env, user.id, jobId);
+    if (!job) return sse({ reply: 'That capture is gone.', job: null });
+    const action = /\bimages?\b/i.test(message) ? 'images' : 'full';
+    return sse({ reply: action === 'images' ? 'Starting the image download.' : 'Starting the download.', job: publicJob(env, job), action });
+  }
+
+  if (jobId && /\b(undo|reset)\b/i.test(message)) {
+    const job = await loadJob(env, user.id, jobId);
+    if (!job) return sse({ reply: 'That capture is gone.', job: null });
+    try { await undoChange(env, job); }
+    catch (err) { return sse({ reply: err.message || 'Nothing to undo.', job: publicJob(env, job) }); }
+    return sse({ reply: 'Undid the last edit.', job: publicJob(env, job), edited: true });
+  }
+
   if (!jobId) {
     try {
       const turn = await answer(env, [
-        { role: 'system', content: 'You are Protobuild. Answer in a short paragraph.' },
-        { role: 'user', content: message },
+        { role: 'system', content: 'You are Protobuild. Answer in a short paragraph. The person may attach a reference image.' },
+        ...history,
+        { role: 'user', content },
       ], 400);
       return sse({ reply: (turn.text || '').trim(), job: null, model: turn.model, quotaReset: turn.quotaReset || '' });
     } catch (err) {
@@ -139,38 +242,56 @@ async function handleAgent(request, env, user) {
   const pageObj = await env.R2.get(`sites/${jobId}/index.html`);
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();
+  const outline = visiblePage(page);
+  const question = /\?\s*$/.test(message) || /^(what|why|how|who|when|where|which)\b/i.test(message);
+  if (question) {
+    try {
+      const turn = await answer(env, [
+        { role: 'system', content: 'Answer in two short sentences from the page outline. If it is not there, say so.' },
+        ...history,
+        { role: 'user', content: `Page outline:\n${outline}\n\n${message}` },
+      ], 180);
+      return sse({ reply: (turn.text || 'That is not in the page text.').trim(), job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
+    } catch (err) {
+      return sse({ reply: err.message || 'The chat did not answer.', job: publicJob(env, job) });
+    }
+  }
+
   let turn;
   try {
     turn = await answer(env, [
-      { role: 'system', content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}]}. css may set color, type, size, alignment, spacing, borders, width, flex, or display. replace.from must be copied exactly from the page text. Leave a field empty when you are not using it.' },
-      { role: 'user', content: `Page text:\n${page.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 1600)}\n\nRequest: ${message}` },
-    ], 400);
+      { role: 'system', content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}]}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, float, or display. replace.from must be copied exactly from the page text. replace.to may include a short HTML section. Leave a field empty when you are not using it. Do not apply the change yourself.' },
+      ...history,
+      { role: 'user', content: withOutline(content, outline) },
+    ], 420);
   } catch (err) {
     return sse({ reply: err.message || 'The edit did not run.', job: publicJob(env, job) });
   }
   const parsed = parseJson(turn.text);
-  const replaced = applyReplacements(page, parsed.replace);
+  const proposals = [];
   const checked = parsed.css ? validateCss(parsed.css) : { ok: false };
-  if (!replaced.html && !checked.ok) {
+  if (checked.ok) {
+    proposals.push({ kind: 'css', jobId, before: '(current custom CSS)', after: checked.css, css: checked.css });
+  }
+  const swap = Array.isArray(parsed.replace) ? parsed.replace[0] : null;
+  if (swap?.from && page.includes(swap.from)) {
+    proposals.push({ kind: 'html', jobId, before: String(swap.from).slice(0, 500), after: String(swap.to || '').slice(0, 500), find: swap.from, replace: swap.to || '' });
+  }
+  if (!proposals.length) {
     return sse({
-      reply: 'That change could not be applied. Wording, color, type, size, alignment, borders, and spacing can be changed.',
+      reply: 'That change is waiting on a clearer request. Wording, color, type, size, layout, and a new section can be proposed.',
       job: publicJob(env, job),
       model: turn.model,
       editFailed: true,
     });
   }
-  if (replaced.html) {
-    await env.R2.put(`sites/${jobId}/index.html`, replaced.html, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
-  }
-  if (checked.ok) {
-    const prevObj = await env.R2.get(`sites/${jobId}/custom.css`);
-    const prev = prevObj ? (await prevObj.text()).trim() : '';
-    await env.R2.put(`sites/${jobId}/custom.css`, prev ? `${prev}\n\n${checked.css}` : checked.css, {
-      httpMetadata: { contentType: 'text/css' },
-    });
-  }
-  const reply = replaced.notes[0] || `${hostOf(job.source_url)} is updated.`;
-  return sse({ reply, job: publicJob(env, job), edited: true, model: turn.model, quotaReset: turn.quotaReset || '' });
+  return sse({
+    reply: 'That change is waiting below. Apply it when it looks right.',
+    job: publicJob(env, job),
+    proposals,
+    model: turn.model,
+    quotaReset: turn.quotaReset || '',
+  });
 }
 
 function parseJson(text) {
@@ -212,7 +333,68 @@ function publicJob(env, job) {
   const preview = env.PREVIEW_DOMAIN
     ? `https://p-${job.id}.${env.PREVIEW_DOMAIN}/`
     : `/preview/${job.id}/`;
-  return { ...job, previewUrl: preview };
+  const shareUrl = shareLive(job) ? `/share/${job.share_token}/` : null;
+  return { ...job, previewUrl: preview, shareUrl, hostedUrl: job.options?.hostedUrl || null };
+}
+
+async function shareJob(request, env, user, jobId) {
+  const job = await loadJob(env, user.id, jobId);
+  if (!job) return json({ error: 'Job not found' }, 404);
+  if (job.status !== 'done') return json({ error: 'The page is not ready to share.' }, 400);
+  const body = await request.json().catch(() => ({}));
+  const next = await setShare(env, job, { enabled: body.enabled !== false, days: body.expiresInDays });
+  await saveJob(env, next);
+  return json(publicJob(env, next));
+}
+
+async function applyJob(request, env, user, jobId) {
+  const job = await loadJob(env, user.id, jobId);
+  if (!job) return json({ error: 'Job not found' }, 404);
+  const body = await request.json().catch(() => ({}));
+  try { await applyChange(env, job, body); }
+  catch (err) { return json({ error: err.message || 'That change was not applied.' }, err.status || 400); }
+  return json(publicJob(env, job));
+}
+
+async function undoJob(env, user, jobId) {
+  const job = await loadJob(env, user.id, jobId);
+  if (!job) return json({ error: 'Job not found' }, 404);
+  try { await undoChange(env, job); }
+  catch (err) { return json({ error: err.message || 'Nothing to undo.' }, err.status || 400); }
+  return json(publicJob(env, job));
+}
+
+async function logoJob(request, env, user, jobId) {
+  const job = await loadJob(env, user.id, jobId);
+  if (!job) return json({ error: 'Job not found' }, 404);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get('file');
+  const name = String(file?.name || '');
+  const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  if (!file || !['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(ext)) {
+    return json({ error: 'Use a png, jpg, webp, gif, or svg logo.' }, 400);
+  }
+  try {
+    const reply = await saveLogo(env, job, `brand-logo${ext}`, await file.arrayBuffer());
+    return json({ ...publicJob(env, job), reply });
+  } catch (err) {
+    return json({ error: err.message || 'That logo did not upload.' }, err.status || 400);
+  }
+}
+
+async function bumpUsage(env, userId) {
+  const day = new Date().toISOString().slice(0, 10);
+  const key = `usage/${userId}/${day}.json`;
+  const existing = env.R2 ? await env.R2.get(key) : null;
+  const count = existing ? Number((await existing.json().catch(() => ({}))).count) || 0 : 0;
+  const cap = Number(env.MAX_PROMPTS_PER_DAY) || 1500;
+  if (count >= cap) return { ok: false, count, cap };
+  if (env.R2) {
+    await env.R2.put(key, JSON.stringify({ count: count + 1, day }), {
+      httpMetadata: { contentType: 'application/json' },
+    });
+  }
+  return { ok: true, count: count + 1, cap };
 }
 
 function viewableListed(img) {

@@ -36,7 +36,7 @@
   <div class="desktop-only" role="status">
     <div class="desktop-card">
       <h1>Desktop only</h1>
-      <p>Protobuild does not run on a phone. Open it on a computer, in a wide window.</p>
+      <p>The editor runs on a computer. A shared preview link still opens on a phone.</p>
     </div>
   </div>
   <div class="app">
@@ -107,6 +107,7 @@
       </div>
       <div class="stream" id="stream"></div>
       <form class="composer" id="composer">
+        <div class="ref-row" id="refRow" hidden></div>
         <textarea id="input" rows="2" placeholder="Paste a link, or ask me to change, download, or host it…"></textarea>
         <div class="composer-row">
           <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
@@ -198,7 +199,7 @@
       </figure>
       <button class="lb-nav" type="button" id="lbNext" aria-label="Next image">›</button>
     </div>
-    <input id="file" type="file" accept=".html,.htm,.zip,text/html" hidden>
+    <input id="file" type="file" accept=".html,.htm,.zip,text/html,image/png,image/jpeg,image/webp,image/gif" hidden>
 
     <div class="stubs" hidden>
       <button type="button" id="helpBtn"></button>

@@ -829,7 +829,7 @@ function statusLine(job) {
 function wireCard(box, job) {
   box.querySelector('[data-open]')?.addEventListener('click', () => window.open(job.previewUrl, '_blank', 'noopener'));
   box.querySelector('[data-zip]')?.addEventListener('click', () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job)));
-  box.querySelector('[data-share]')?.addEventListener('click', () => share(job));
+  box.querySelector('[data-share]')?.addEventListener('click', (event) => openShare(job, event.currentTarget));
   box.querySelector('[data-host]')?.addEventListener('click', () => hostPage(job));
 }
 
@@ -860,19 +860,39 @@ async function hostPage(job) {
   }
 }
 
-async function share(job) {
+function absoluteLink(url) {
+  const raw = String(url || '');
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return location.origin + (raw.startsWith('/') ? raw : `/${raw}`);
+}
+
+async function share(job, days = 7) {
   try {
     const updated = await api('/api/jobs/' + job.id + '/share', {
       method: 'POST',
-      body: JSON.stringify({ enabled: true, expiresInDays: 7 }),
+      body: JSON.stringify({ enabled: days !== 'off', expiresInDays: days === 'off' ? 0 : days }),
     });
     activeJob = updated;
-    if (!updated.shareUrl) { toast('I could not turn the link on.'); return; }
-    await copyText(updated.shareUrl, 'Share link copied.');
-    say('ai', `Live link:\n${updated.shareUrl}`);
+    if (days === 'off') { toast('Share link turned off.'); return; }
+    const link = absoluteLink(updated.shareUrl);
+    if (!link) { toast('I could not turn the link on.'); return; }
+    await copyText(link, 'Share link copied.');
+    say('ai', `Live link:\n${link}`);
   } catch (err) {
     toast(err.message);
   }
+}
+
+function openShare(job, anchor) {
+  if (!job) { toast('Open a capture first.'); return; }
+  showPop('<h3>Share preview</h3><p class="menu-note">The link opens the preview, including on a phone.</p><button class="menu-act" type="button" data-go="d7">7 days</button><button class="menu-act" type="button" data-go="d30">30 days</button><button class="menu-act" type="button" data-go="never">Until the capture expires</button><button class="menu-act danger" type="button" data-go="off">Turn the link off</button>', anchor || document.getElementById('threadMenu'));
+  wirePop({
+    d7: () => { closePop(); share(job, 7); },
+    d30: () => { closePop(); share(job, 30); },
+    never: () => { closePop(); share(job, 0); },
+    off: () => { closePop(); share(job, 'off'); },
+  });
 }
 
 const chimedJobs = new Set();
@@ -1104,8 +1124,25 @@ function paint(box, text) {
 
 function setModel(box, model, quotaReset) {
   const last = [...thread].reverse().find((item) => item.role === 'ai');
-  if (last && quotaReset) last.quotaReset = quotaReset;
-  box?.parentElement?.querySelector('.model-tag')?.remove();
+  if (last) {
+    if (model) last.model = model;
+    if (quotaReset) last.quotaReset = quotaReset;
+  }
+  if (!box || !model) return;
+  let tag = box.parentElement?.querySelector('.model-tag');
+  if (!tag) {
+    tag = document.createElement('div');
+    tag.className = 'model-tag';
+    box.insertAdjacentElement('afterend', tag);
+  }
+  let when = '';
+  if (quotaReset) {
+    const back = new Date(quotaReset);
+    if (!Number.isNaN(back.getTime())) {
+      when = ` · back ${back.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+    }
+  }
+  tag.textContent = `${model}${when}`;
 }
 
 function showProposal(box, proposal) {
@@ -1173,6 +1210,7 @@ async function onSend(text) {
       body: JSON.stringify({
         message: trimmed,
         history,
+        images: refs.map((item) => item.url),
         activeJobId: activeJob?.id || null,
         rights_confirmed: true,
       }),
@@ -1258,13 +1296,16 @@ document.getElementById('composer').addEventListener('submit', (e) => {
     return;
   }
   const text = input.value;
-  if (!text.trim()) {
+  if (!text.trim() && !refs.length) {
     toast('Type a message or paste a link first.');
     input.focus();
     return;
   }
   input.value = '';
-  onSend(text);
+  const outgoing = text.trim() || 'Use the attached image as a reference.';
+  onSend(outgoing);
+  refs.splice(0, refs.length);
+  paintRefs();
 });
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1832,7 +1873,7 @@ function openThread(e) {
       loadGallery(activeJob);
     },
     copy: () => { if (activeJob?.previewUrl) copyText(activeJob.previewUrl, 'Preview link copied.'); else toast('The preview is not ready yet.'); },
-    share: () => { closePop(); if (activeJob) share(activeJob); },
+    share: () => { closePop(); if (activeJob) openShare(activeJob); },
     host: () => { closePop(); if (activeJob) hostPage(activeJob); },
     remove: () => { if (activeJob) removeCapture(activeJob.id); },
   });
@@ -1844,11 +1885,59 @@ document.getElementById('uploadNav').onclick = () => {
   closeSettingsPage();
   document.getElementById('file').click();
 };
+const refs = [];
+
+function paintRefs() {
+  const row = document.getElementById('refRow');
+  if (!row) return;
+  row.hidden = refs.length === 0;
+  row.innerHTML = refs.map((item, index) => `<div class="ref-chip"><img src="${item.url}" alt=""><button type="button" data-ref="${index}" aria-label="Remove ${esc(item.name)}">×</button></div>`).join('');
+  row.querySelectorAll('[data-ref]').forEach((btn) => {
+    btn.onclick = () => {
+      refs.splice(Number(btn.dataset.ref), 1);
+      paintRefs();
+    };
+  });
+}
+
+function addReference(file) {
+  if (!file) return;
+  const image = /^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(file.name || '');
+  if (!image) {
+    uploadFile(file).catch((err) => say('ai', err.message));
+    return;
+  }
+  if (refs.length >= 3) { toast('Three reference images at a time.'); return; }
+  if (file.size > 1500000) { toast('That image is over 1.5 MB.'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    refs.push({ name: file.name || 'image', url: String(reader.result || '') });
+    paintRefs();
+  };
+  reader.readAsDataURL(file);
+}
+
 document.getElementById('file').onchange = (e) => {
   const file = e.target.files?.[0];
   e.target.value = '';
-  if (file) uploadFile(file).catch((err) => say('ai', err.message));
+  if (file) addReference(file);
 };
+
+const composer = document.getElementById('composer');
+['dragenter', 'dragover'].forEach((name) => {
+  composer.addEventListener(name, (event) => {
+    if (![...event.dataTransfer?.items || []].some((item) => item.kind === 'file')) return;
+    event.preventDefault();
+    composer.classList.add('drop-on');
+  });
+});
+composer.addEventListener('dragleave', () => composer.classList.remove('drop-on'));
+composer.addEventListener('drop', (event) => {
+  if (!event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  composer.classList.remove('drop-on');
+  [...event.dataTransfer.files].slice(0, 3).forEach(addReference);
+});
 document.getElementById('helpBtn').onclick = openHelp;
 document.getElementById('helpPill').onclick = openHelp;
 document.getElementById('helpTop').onclick = openHelp;

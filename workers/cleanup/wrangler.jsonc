@@ -1,0 +1,14 @@
+{
+  "name": "protobuild-cleanup",
+  "main": "index.js",
+  "compatibility_date": "2026-10-21",
+  "triggers": {
+    "crons": ["15 8 * * *"]
+  },
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "prototype-builder"
+    }
+  ]
+}

@@ -10,8 +10,10 @@ const ALLOWED_PROPS = new Set([
   'width', 'max-width', 'min-width', 'height', 'max-height', 'min-height',
   'display', 'visibility', 'opacity', 'overflow', 'object-fit',
   'position', 'top', 'right', 'bottom', 'left', 'z-index',
-  'flex', 'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'align-content',
+  'flex', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis', 'justify-content', 'align-items', 'align-content', 'align-self', 'order',
+  'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row', 'grid-auto-flow', 'justify-self', 'place-items', 'place-content',
   'box-shadow', 'transform', 'cursor', 'list-style', 'list-style-type',
+  'inset', 'float', 'clear', 'aspect-ratio', 'object-position',
 ]);
 const DISPLAY = new Set(['none', 'block', 'inline', 'inline-block', 'flex', 'inline-flex', 'grid', 'contents']);
 const POSITION = new Set(['static', 'relative', 'absolute', 'sticky']);
@@ -49,13 +51,16 @@ function validateCss(css) {
 }
 
 function valueOk(prop, value) {
-  if (!value || value.length > 180) return false;
+  if (!value || value.length > 280) return false;
   if (BANNED.some((re) => re.test(value))) return false;
   if (prop === 'display') return DISPLAY.has(value.toLowerCase());
   if (prop === 'visibility') return ['hidden', 'visible', 'collapse'].includes(value.toLowerCase());
   if (prop === 'opacity') return /^(0|1|0?\.\d+)$/.test(value);
   if (prop === 'position') return POSITION.has(value.toLowerCase());
   if (prop === 'z-index') return /^-?\d{1,4}$/.test(value);
+  if (prop === 'float') return ['left', 'right', 'none'].includes(value.toLowerCase());
+  if (prop === 'clear') return ['left', 'right', 'both', 'none'].includes(value.toLowerCase());
+  if (prop === 'order') return /^-?\d{1,3}$/.test(value);
   return true;
 }
 

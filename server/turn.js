@@ -59,7 +59,21 @@ function styleLine(text, host) {
   return `${host} is updated.`;
 }
 
-async function runTurn({ message, purpose, activeJob, onEvent, deps }) {
+function priorMessages(history) {
+  return (Array.isArray(history) ? history : []).slice(-6).map((item) => ({
+    role: item.role === 'ai' || item.role === 'assistant' ? 'assistant' : 'user',
+    content: String(item.text || item.content || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+  })).filter((item) => item.content);
+}
+
+function userContent(message, images) {
+  const text = String(message || '').trim() || 'Use the attached image as a reference.';
+  const pics = (Array.isArray(images) ? images : []).slice(0, 3).filter((url) => /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(String(url)) && String(url).length < 2000000);
+  if (!pics.length) return text;
+  return [{ type: 'text', text }, ...pics.map((url) => ({ type: 'image_url', image_url: { url } }))];
+}
+
+async function runTurn({ message, purpose, history, images, activeJob, onEvent, deps }) {
   const text = String(message || '').trim();
   if (purpose === 'ready') {
     if (!activeJob) return { reply: 'That capture is gone.', job: null };
@@ -92,8 +106,9 @@ async function runTurn({ message, purpose, activeJob, onEvent, deps }) {
 
   if (!activeJob) {
     const turn = await say([
-      { role: 'system', content: 'You are Protobuild. Answer in a short paragraph. Do not start a capture.' },
-      { role: 'user', content: text },
+      { role: 'system', content: 'You are Protobuild. Answer in a short paragraph. Do not start a capture. The person may attach a reference image.' },
+      ...priorMessages(history),
+      { role: 'user', content: userContent(text, images) },
     ], 220, onEvent, true);
     const reply = (turn.text || turn.error || 'No answer came back. Send that again.').trim();
     if (!turn.text) onEvent?.({ type: 'token', text: reply });
@@ -141,17 +156,21 @@ async function runTurn({ message, purpose, activeJob, onEvent, deps }) {
   if (localCss) {
     const checked = validateCss(localCss);
     if (checked.ok) {
-      await deps.writeCss(activeJob, checked.css);
-      const reply = styleLine(text, hostOf(activeJob.source_url));
+      const reply = 'That change is waiting below. Apply it when it looks right.';
       onEvent?.({ type: 'token', text: reply });
-      return { reply, job: activeJob, edited: true };
+      return {
+        reply,
+        job: activeJob,
+        proposals: [{ kind: 'css', jobId: activeJob.id, before: '(current custom CSS)', after: checked.css, css: checked.css }],
+      };
     }
   }
 
   if (isQuestion(text)) {
     const turn = await say([
       { role: 'system', content: 'Answer in two short sentences from the page text. If it is not on the page, say so.' },
-      { role: 'user', content: `Page text:\n${visibleText(page)}\n\n${text}` },
+      ...priorMessages(history),
+    { role: 'user', content: `Page text:\n${visibleText(page)}\n\n${text}` },
     ], 160, onEvent, true);
     const reply = (turn.text || turn.error || 'That is not in the page text.').trim();
     if (!turn.text) onEvent?.({ type: 'token', text: reply });
@@ -162,22 +181,29 @@ async function runTurn({ message, purpose, activeJob, onEvent, deps }) {
   const turn = await say([
     {
       role: 'system',
-      content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"move":{"node":"","where":"above","anchor":""}}. css may set color, type, size, alignment, spacing, borders, width, flex, or display. replace.from must be copied exactly from the page text. Leave a field as an empty string or empty list when you are not using it. Do not invent page parts.',
+      content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"move":{"node":"","where":"above","anchor":""}}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, float, or display, and it may move or add a section. replace.from must be copied exactly from the page text. replace.to may include a short HTML section. Leave a field as an empty string or empty list when you are not using it. Do not invent page parts.',
     },
-    { role: 'user', content: `Page text:\n${visibleText(page)}\n\nRequest: ${text}` },
+    ...priorMessages(history),
+    { role: 'user', content: userContent(`Page text:\n${visibleText(page)}\n\nRequest: ${text}`, images) },
   ], 420, onEvent);
   const parsed = parseModelJson(turn.text);
   const plan = applyModelPlan(page, parsed);
-  if (!plan.html && !plan.css) {
-    const reply = 'That change could not be applied. The page can take a new logo, new wording, a move, or styling for color, type, size, alignment, borders, and spacing. Say host this when you want it on Cloudflare.';
+  const proposals = [];
+  if (plan.css) {
+    const checked = validateCss(plan.css);
+    if (checked.ok) proposals.push({ kind: 'css', jobId: activeJob.id, before: '(current custom CSS)', after: checked.css, css: checked.css });
+  }
+  if (plan.html && plan.html !== page) {
+    proposals.push({ kind: 'html', jobId: activeJob.id, before: visibleText(page).slice(0, 280), after: (plan.notes[0] || 'Updated page'), html: plan.html });
+  }
+  if (!proposals.length) {
+    const reply = 'That change could not be applied. The page can take a new logo, new wording, a move, or styling for color, type, size, layout, borders, and spacing. Say host this when you want it on Cloudflare.';
     onEvent?.({ type: 'token', text: reply });
     return { reply, job: activeJob, model: turn.model, quotaReset: turn.quotaReset || '', editFailed: true };
   }
-  if (plan.html && deps.writeHtml) await deps.writeHtml(activeJob, plan.html);
-  if (plan.css) await deps.writeCss(activeJob, plan.css);
-  const reply = plan.notes[0] || styleLine(text, host);
+  const reply = 'That change is waiting below. Apply it when it looks right.';
   onEvent?.({ type: 'token', text: reply });
-  return { reply, job: activeJob, edited: true, model: turn.model, quotaReset: turn.quotaReset || '', note: turn.note || '' };
+  return { reply, job: activeJob, proposals, model: turn.model, quotaReset: turn.quotaReset || '', note: turn.note || '' };
 }
 
 module.exports = { runTurn, parseModelJson };

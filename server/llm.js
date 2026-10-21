@@ -4,7 +4,7 @@ const env = require('./env');
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 const QUOTA_FILE = path.join(env.root, 'data', 'gemini-quota.json');
-const FALLBACK_MODEL = 'qwen2.5-coder:1.5b';
+const FALLBACK_MODEL = 'qwen2.5-coder:3b';
 
 function quotaUntil() {
   try {
@@ -160,47 +160,77 @@ async function readSse(res, model, onToken) {
   };
 }
 
-async function gemini(messages, { tools, maxTokens, onToken }) {
-  const body = {
-    model: env.geminiModel,
-    messages,
-    temperature: 0.4,
-    max_tokens: maxTokens || 4096,
-  };
-  if (tools?.length) body.tools = tools;
-  if (onToken) body.stream = true;
-  let res;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    res = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.geminiApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(onToken ? 120000 : 60000),
-    });
-    if (res.status !== 503 && res.status !== 502) break;
-    await res.text().catch(() => {});
+function geminiModels() {
+  const preferred = String(env.geminiModel || 'gemini-3.8-flash').trim() || 'gemini-3.8-flash';
+  return [...new Set([preferred, 'gemini-3.5-flash', 'gemini-3-flash-preview'])];
+}
+
+async function gemini(messages, { tools, maxTokens }) {
+  let last = new Error('The chat model is busy. Try again in a moment.');
+  let attempts = 0;
+  let quotaHits = 0;
+  for (const model of geminiModels()) {
+    const body = {
+      model,
+      messages,
+      temperature: 0.4,
+      max_tokens: Math.max(maxTokens || 4096, 128),
+      reasoning_effort: 'low',
+    };
+    if (tools?.length) body.tools = tools;
+    let res;
+    try {
+      res = await fetch(GEMINI_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.geminiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      attempts += 1;
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        last = new Error('The chat model is busy. Try again in a moment.');
+        continue;
+      }
+      throw err;
+    }
+    attempts += 1;
+    if (res.status === 503 || res.status === 502) {
+      await res.text().catch(() => {});
+      last = new Error('The chat model is busy. Try again in a moment.');
+      continue;
+    }
+    if (res.status === 429) {
+      const detail = await res.text();
+      const error = new Error('quota');
+      error.code = 'quota';
+      error.until = classifyQuota(res.headers.get('retry-after'), detail);
+      last = error;
+      quotaHits += 1;
+      continue;
+    }
+    if (!res.ok) {
+      const detail = await res.text();
+      last = new Error(`Gemini returned ${res.status}`);
+      last.code = 'gemini';
+      last.detail = detail.slice(0, 280);
+      continue;
+    }
+    const choice = parseChoice(await res.json(), model);
+    if (!choice.text && !(choice.toolCalls || []).length) {
+      last = new Error('The chat model returned an empty reply.');
+      continue;
+    }
+    return choice;
   }
-  if (res.status === 429) {
-    const detail = await res.text();
-    const until = classifyQuota(res.headers.get('retry-after'), detail);
-    rememberQuota(until);
-    const error = new Error('quota');
-    error.code = 'quota';
-    error.until = until;
-    throw error;
+  if (quotaHits > 0 && quotaHits === attempts) {
+    rememberQuota(last.until);
+    throw last;
   }
-  if (!res.ok) {
-    const detail = await res.text();
-    const error = new Error(`Gemini returned ${res.status}`);
-    error.code = 'gemini';
-    error.detail = detail.slice(0, 280);
-    throw error;
-  }
-  if (onToken) return readSse(res, env.geminiModel, onToken);
-  return parseChoice(await res.json(), env.geminiModel);
+  throw last;
 }
 
 function forOllama(messages) {
@@ -296,7 +326,7 @@ async function ollamaChat(messages, bag) {
 }
 
 async function localModel(messages, options) {
-  const models = [pinnedModel, options.prefer, FALLBACK_MODEL, 'qwen2.5-coder:3b']
+  const models = [pinnedModel, options.prefer, FALLBACK_MODEL, 'qwen2.5-coder:1.5b']
     .filter((model, index, list) => model && list.indexOf(model) === index);
   let last = 'Ollama is not running on this Mac.';
   for (const model of models) {
@@ -320,8 +350,11 @@ async function completeChat(messages, options = {}) {
   const held = quotaUntil();
   if (env.geminiApiKey && !held) {
     try {
-      onMeta({ model: env.geminiModel, quotaReset: '', note: '' });
-      return await gemini(messages, options);
+      const { onToken, ...rest } = options;
+      const turn = await gemini(messages, rest);
+      if (turn.model) onMeta({ model: turn.model, quotaReset: '', note: '' });
+      if (turn.text && onToken) onToken(turn.text);
+      return turn;
     } catch (err) {
       if (err.code === 'quota') {
         if (!allowLocal) {

@@ -1,6 +1,6 @@
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 const KEY = 'gemini-down-until';
-const OLLAMA_MODEL = 'qwen2.5-coder:1.5b';
+const OLLAMA_MODELS = ['qwen2.5-coder:3b', 'qwen2.5-coder:1.5b'];
 
 function zonedMidnight(timeZone, from = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -72,31 +72,60 @@ function tunnel(env) {
 
 async function ollama(env, messages, maxTokens) {
   const base = tunnel(env);
-  let res;
-  try {
-    res = await fetch(`${base}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(20000),
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        messages,
-        stream: false,
-        options: { temperature: 0.2, num_predict: maxTokens },
-      }),
-    });
-  } catch (err) {
-    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') throw new Error('The backup model took too long to answer.');
-    throw err;
+  let last = new Error('The backup model did not answer.');
+  for (const model of OLLAMA_MODELS) {
+    let res;
+    try {
+      res = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          options: { temperature: 0.2, num_predict: maxTokens },
+        }),
+      });
+    } catch (err) {
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        last = new Error('The backup model took too long to answer.');
+        continue;
+      }
+      throw err;
+    }
+    if (res.status === 404) {
+      await res.text().catch(() => {});
+      last = new Error(`Ollama has no ${model}.`);
+      continue;
+    }
+    if (!res.ok) {
+      await res.text().catch(() => {});
+      last = new Error(`Ollama returned ${res.status}`);
+      continue;
+    }
+    const json = await res.json();
+    const text = json.message?.content || '';
+    if (!String(text).trim()) {
+      last = new Error('The backup model returned an empty reply.');
+      continue;
+    }
+    return { text, model };
   }
-  if (!res.ok) throw new Error(`Ollama returned ${res.status}`);
-  const json = await res.json();
-  return { text: json.message?.content || '', model: OLLAMA_MODEL };
+  throw last;
+}
+
+function geminiModels(env) {
+  const preferred = String(env.GEMINI_MODEL || 'gemini-3.8-flash').trim() || 'gemini-3.8-flash';
+  return [...new Set([preferred, 'gemini-3.5-flash', 'gemini-3-flash-preview'])];
 }
 
 async function gemini(env, messages, maxTokens) {
-  let res;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  let last = new Error('The chat model is busy. Try again in a moment.');
+  let attempts = 0;
+  let quotaHits = 0;
+  for (const model of geminiModels(env)) {
+    let res;
     try {
       res = await fetch(GEMINI_URL, {
         method: 'POST',
@@ -104,30 +133,53 @@ async function gemini(env, messages, maxTokens) {
           Authorization: `Bearer ${env.GEMINI_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(25000),
         body: JSON.stringify({
-          model: env.GEMINI_MODEL || 'gemini-3.8-flash',
+          model,
           messages,
           temperature: 0.2,
-          max_tokens: maxTokens,
+          max_tokens: Math.max(Number(maxTokens) || 200, 128),
+          reasoning_effort: 'low',
         }),
       });
     } catch (err) {
-      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') throw new Error('Gemini took too long to answer.');
+      attempts += 1;
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        last = new Error('The chat model is busy. Try again in a moment.');
+        continue;
+      }
       throw err;
     }
-    if (res.status !== 503 && res.status !== 502) break;
+    attempts += 1;
+    if (res.status === 503 || res.status === 502) {
+      await res.text().catch(() => {});
+      last = new Error('The chat model is busy. Try again in a moment.');
+      continue;
+    }
+    if (res.status === 429) {
+      const detail = await res.text();
+      const error = new Error('quota');
+      error.code = 'quota';
+      error.until = classifyQuota(res.headers.get('retry-after'), detail);
+      last = error;
+      quotaHits += 1;
+      continue;
+    }
+    if (!res.ok) {
+      await res.text().catch(() => {});
+      last = new Error(`Gemini returned ${res.status}`);
+      continue;
+    }
+    const json = await res.json();
+    const text = json.choices?.[0]?.message?.content || '';
+    if (!String(text).trim()) {
+      last = new Error('The chat model returned an empty reply.');
+      continue;
+    }
+    return { text, model };
   }
-  if (res.status === 429) {
-    const detail = await res.text();
-    const error = new Error('quota');
-    error.code = 'quota';
-    error.until = classifyQuota(res.headers.get('retry-after'), detail);
-    throw error;
-  }
-  if (!res.ok) throw new Error(`Gemini returned ${res.status}`);
-  const json = await res.json();
-  return { text: json.choices?.[0]?.message?.content || '', model: env.GEMINI_MODEL || 'gemini-3.8-flash' };
+  if (quotaHits > 0 && quotaHits === attempts) throw last;
+  throw last;
 }
 
 export async function answer(env, messages, maxTokens) {
