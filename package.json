@@ -1,0 +1,12 @@
+{
+  "name": "prototype-builder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private website prototype capture tool",
+  "scripts": {
+    "dev": "node server/index.js",
+    "start": "node server/index.js",
+    "capture": "node capture/capture.js",
+    "postinstall": "npm install --prefix capture"
+  }
+}

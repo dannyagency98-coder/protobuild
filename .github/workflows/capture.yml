@@ -1,0 +1,50 @@
+name: Capture Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID'
+        required: true
+      mode:
+        description: 'clone | images | upload'
+        required: true
+      url:
+        description: 'Source URL'
+        required: false
+      options:
+        description: 'JSON options'
+        required: false
+        default: '{}'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: capture/package-lock.json
+      - name: Install dependencies
+        working-directory: capture
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: capture
+        run: npx playwright install --with-deps chromium
+      - name: Run capture
+        working-directory: capture
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          MODE: ${{ inputs.mode }}
+          URL: ${{ inputs.url }}
+          OPTIONS: ${{ inputs.options }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: node capture.js

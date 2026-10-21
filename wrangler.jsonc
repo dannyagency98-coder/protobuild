@@ -1,0 +1,16 @@
+{
+  "name": "proto-build",
+  "pages_build_output_dir": "./app",
+  "compatibility_date": "2026-10-21",
+  "vars": {
+    "GITHUB_REPO": "dannyagency98-coder/protobuild",
+    "GITHUB_WORKFLOW_FILE": "capture.yml",
+    "GITHUB_REF": "main"
+  },
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "prototype-builder"
+    }
+  ]
+}

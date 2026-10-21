@@ -1,0 +1,9 @@
+{
+  "timeoutSec": 180,
+  "maxTotalMB": 500,
+  "maxFileMB": 25,
+  "maxPromptsPerDay": 1500,
+  "previewTTLDays": 30,
+  "maxActivePreviews": 25,
+  "maxScrollSteps": 60
+}

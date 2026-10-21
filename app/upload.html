@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Upload a saved page — Protobuild</title>
+  <meta name="description" content="Add an HTML file or a ZIP you already saved. Protobuild opens it in the same iPhone preview as a live capture.">
+  <meta name="application-name" content="Protobuild">
+  <meta name="title" content="Upload a saved page — Protobuild">
+  <meta property="og:site_name" content="Protobuild">
+  <meta property="og:title" content="Upload a saved page — Protobuild">
+  <meta property="og:description" content="Add an HTML file or a ZIP you already saved. Protobuild opens it in the same iPhone preview as a live capture.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Upload a saved page — Protobuild">
+  <meta name="twitter:description" content="Add an HTML file or a ZIP you already saved. Protobuild opens it in the same iPhone preview as a live capture.">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    try {
+      const prefs = JSON.parse(localStorage.getItem('pb-prefs') || '{}');
+      const theme = prefs.theme || 'light';
+      const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    } catch (err) {}
+  </script>
+</head>
+<body class="sheet">
+  <div class="desktop-only" role="status">
+    <div class="desktop-card">
+      <h1>Desktop only</h1>
+      <p>Protobuild does not run on a phone. Open it on a computer, in a wide window.</p>
+    </div>
+  </div>
+  <main class="sheet-wrap">
+    <a class="sheet-brand" href="/">
+      <span class="mark" aria-hidden="true"></span>
+      Protobuild
+    </a>
+    <p class="sheet-kicker">Upload</p>
+    <h1>Bring a page you already saved.</h1>
+    <p class="sheet-lede">Use an HTML file or a ZIP that contains one. Protobuild pulls the images out and opens the same preview as a live capture.</p>
+    <section class="sheet-card">
+      <button class="sheet-drop" id="drop" type="button">Drop an HTML or ZIP file here</button>
+      <input id="file" type="file" accept=".html,.htm,.zip,application/zip,text/html" hidden>
+      <div class="sheet-actions">
+        <button class="sheet-btn solid" type="button" id="pick">Choose a file</button>
+        <button class="sheet-btn" type="button" id="send" disabled>Upload</button>
+      </div>
+      <p class="sheet-error" id="err" hidden></p>
+    </section>
+    <p class="sheet-note">When a site says no, save the page in your browser and drop that file here. Logins, bot checks, and heavy animation often fail a live capture.</p>
+  </main>
+  <script src="app.js"></script>
+  <script>
+    let file = null;
+    const drop = document.getElementById('drop');
+    const err = document.getElementById('err');
+    const send = document.getElementById('send');
+
+    function setFile(f) {
+      file = f || null;
+      drop.textContent = file ? file.name : 'Drop an HTML or ZIP file here';
+      send.disabled = !file;
+    }
+
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      drop.classList.remove('over');
+      setFile(e.dataTransfer.files[0]);
+    });
+    document.getElementById('pick').addEventListener('click', () => document.getElementById('file').click());
+    drop.addEventListener('click', () => document.getElementById('file').click());
+    document.getElementById('file').addEventListener('change', (e) => setFile(e.target.files[0]));
+    send.addEventListener('click', upload);
+
+    async function upload() {
+      err.hidden = true;
+      if (!file) return;
+      send.disabled = true;
+      send.textContent = 'Uploading…';
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      fd.append('rights_confirmed', 'true');
+      try {
+        const job = await PB.api('/api/upload', { method: 'POST', body: fd });
+        location.href = '/?job=' + encodeURIComponent(job.id);
+      } catch (e) {
+        err.hidden = false;
+        err.textContent = e.message;
+        send.disabled = false;
+        send.textContent = 'Upload';
+      }
+    }
+  </script>
+</body>
+</html>

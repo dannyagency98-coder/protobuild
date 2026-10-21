@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Protobuild">
+  <defs>
+    <linearGradient id="pb-tile" x1="6" y1="1" x2="28" y2="31" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2c2c2c"/>
+      <stop offset="0.42" stop-color="#111"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="pb-sheen" x1="16" y1="1.5" x2="16" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#pb-tile)" stroke="#f4f4f5" stroke-width="1.25"/>
+  <path d="M8.2 2.4h15.6a7 7 0 0 1 6 3.4 14 14 0 0 0-27.6 0 7 7 0 0 1 6-3.4z" fill="url(#pb-sheen)"/>
+  <rect x="10.15" y="5.35" width="11.7" height="21.3" rx="2.9" fill="#fff"/>
+  <rect x="11.45" y="7.35" width="9.1" height="16.7" rx="1.55" fill="#0c0c0c"/>
+  <rect x="13.45" y="8.55" width="5.1" height="1.35" rx="0.67" fill="#fff"/>
+  <rect x="14.15" y="21.55" width="3.7" height="0.72" rx="0.36" fill="#fff" opacity="0.9"/>
+</svg>

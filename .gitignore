@@ -1,0 +1,8 @@
+node_modules
+out
+data
+.env
+.DS_Store
+*.zip
+capture/test-results
+.wrangler

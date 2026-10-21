@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Protobuild — Capture a site on your phone</title>
+  <meta name="description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta name="application-name" content="Protobuild">
+  <meta name="title" content="Protobuild — Capture a site on your phone">
+  <meta property="og:site_name" content="Protobuild">
+  <meta property="og:title" content="Protobuild — Capture a site on your phone">
+  <meta property="og:description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Protobuild — Capture a site on your phone">
+  <meta name="twitter:description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    try {
+      const prefs = JSON.parse(localStorage.getItem('pb-prefs') || '{}');
+      const theme = prefs.theme || 'system';
+      const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.documentElement.dataset.chat = prefs.chatSide === 'right' ? 'right' : 'left';
+      document.documentElement.dataset.suggestions = prefs.suggestions === false ? 'off' : 'on';
+    } catch (err) {}
+  </script>
+</head>
+<body>
+  <div class="desktop-only" role="status">
+    <div class="desktop-card">
+      <h1>Desktop only</h1>
+      <p>Protobuild does not run on a phone. Open it on a computer, in a wide window.</p>
+    </div>
+  </div>
+  <div class="app">
+    <header class="mobile-bar">
+      <button type="button" id="menuBtn" aria-label="Open menu">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <strong id="mobileTitle">Protobuild</strong>
+      <div class="pane-switch" id="paneSwitch" role="tablist" aria-label="Chat or preview">
+        <button type="button" data-pane="chat" class="on" role="tab" aria-selected="true">Chat</button>
+        <button type="button" data-pane="preview" role="tab" aria-selected="false">Preview</button>
+      </div>
+    </header>
+    <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
+    <aside class="side">
+      <div class="brand-row">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <span>Protobuild</span>
+        </div>
+      </div>
+      <button class="new-chat" type="button" id="newChat">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+        New chat
+      </button>
+      <label class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="chatSearch" type="search" placeholder="Search chats" autocomplete="off">
+      </label>
+      <nav class="side-nav">
+        <button type="button" class="nav-item on" id="homeNav"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>Home</button>
+        <button type="button" class="nav-item" id="uploadNav"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 16V5M7 9l5-5 5 5M5 19h14"/></svg>Upload</button>
+      </nav>
+      <div class="side-label-row">
+        <div class="side-label">Chats</div>
+        <button type="button" id="clearHist">Clear</button>
+      </div>
+      <div class="history-list" id="history"></div>
+      <div class="side-foot">
+        <div class="foot-theme">
+          <span>Theme</span>
+          <div class="theme-seg" id="sideTheme" role="group" aria-label="Theme">
+            <button type="button" data-theme="system" data-tip="System" aria-label="System theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>
+            <button type="button" data-theme="light" data-tip="Light" aria-label="Light theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg></button>
+            <button type="button" data-theme="dark" data-tip="Dark" aria-label="Dark theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg></button>
+          </div>
+        </div>
+        <button type="button" class="me" id="meBtn">
+          <span class="ava"></span>
+          <span class="me-copy"><b>Local</b><span>This computer</span></span>
+        </button>
+      </div>
+    </aside>
+    <button class="split" id="splitSide" type="button" aria-label="Resize history and chat"></button>
+
+    <section class="chat">
+      <div class="chat-bar" id="chatBar">
+        <div class="chat-heading">
+          <span class="chat-title" id="chatTitle">New chat</span>
+          <button type="button" class="chat-id" id="chatId" aria-label="Copy chat id"></button>
+        </div>
+        <button class="icon-quiet" type="button" id="threadMenu" data-tip="Chat actions" aria-label="Chat actions">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/></svg>
+        </button>
+      </div>
+      <div class="hero" id="hero">
+        <h1>What do you want to create?</h1>
+      </div>
+      <div class="stream" id="stream"></div>
+      <form class="composer" id="composer">
+        <textarea id="input" rows="2" placeholder="Paste a link, or ask me to change, download, or host it…"></textarea>
+        <div class="composer-row">
+          <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="tool" type="button" id="clipBtn" data-tip="Attach a saved page" aria-label="Attach">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 12.5l6.2-6.2a3 3 0 1 1 4.2 4.2l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1"/></svg>
+          </button>
+          <button class="chip" type="button" id="micBtn">iPhone 15 Pro</button>
+          <div class="grow"></div>
+          <button class="send" type="submit" id="sendBtn" data-tip="Send" aria-label="Send">
+            <svg class="ico-send" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+            <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </form>
+      <div class="starters">
+        <button type="button" data-prompt="scan example.com"><strong>Scan example.com</strong><span>Open a simple page</span></button>
+        <button type="button" data-prompt="scan xsamplee.pages.dev"><strong>Scan a live site</strong><span>Capture the real layout</span></button>
+        <button type="button" data-prompt="images only https://example.com"><strong>Images only</strong><span>Save the pictures</span></button>
+      </div>
+      <input type="checkbox" id="rights" hidden>
+    </section>
+    <button class="split" id="splitStage" type="button" aria-label="Resize chat and phone"></button>
+
+    <section class="stage">
+      <div class="stage-bar" id="stageBar">
+        <span class="tab on" id="stageHost">Preview</span>
+        <div class="stage-tools">
+          <div class="device-switch" id="deviceSwitch" role="tablist" aria-label="Preview size">
+            <button type="button" data-device="desktop" role="tab">Desktop</button>
+            <button type="button" data-device="tablet" role="tab">Tablet</button>
+            <button type="button" data-device="phone" role="tab">Phone</button>
+          </div>
+          <div class="view-switch" role="tablist" aria-label="Preview or gallery">
+            <button type="button" id="viewPhone" class="on" role="tab" aria-selected="true">Preview</button>
+            <button type="button" id="viewImages" role="tab" aria-selected="false">Gallery <span id="imageCount" class="count">0</span></button>
+          </div>
+        </div>
+        <div class="stage-actions">
+          <button class="stage-btn" type="button" data-open><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 5h5v5"/><path d="M19 5l-8 8"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg>Open</button>
+          <button class="stage-btn" type="button" data-zip><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11M7 11l5 5 5-5"/><path d="M5 19h14"/></svg>Download</button>
+          <button class="stage-btn" type="button" data-share><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="18" cy="5" r="2.2"/><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="19" r="2.2"/><path d="M8.2 11l7.6-4.2M8.2 13l7.6 4.2"/></svg>Share</button>
+          <button class="stage-btn" type="button" data-host>Host</button>
+          <button class="stage-btn" type="button" id="pickBtn">Pick</button>
+          <button class="stage-btn" type="button" id="undoBtn">Undo</button>
+        </div>
+      </div>
+      <div class="stage-canvas" id="phoneView">
+        <div class="phone-slot" id="phoneSlot">
+        <div class="device" aria-label="iPhone 15 Pro">
+          <span class="hw action"></span>
+          <span class="hw vol-up"></span>
+          <span class="hw vol-down"></span>
+          <span class="hw power"></span>
+          <div class="bezel">
+            <div class="screen">
+              <div class="stage-empty" id="stageEmpty">Preview</div>
+              <iframe id="stage" class="hidden" title="Site preview" sandbox="allow-scripts allow-forms allow-popups"></iframe>
+              <div class="island"></div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+      <div class="gallery-view hidden" id="galleryView">
+        <div class="gallery-tools">
+          <label class="tiny-toggle"><input type="checkbox" id="tinyImgs"> Include tiny</label>
+          <span id="galleryNote">No capture open</span>
+          <button class="stage-btn" type="button" id="zipImages">Download images</button>
+        </div>
+        <div class="shot-grid" id="imgGrid"></div>
+      </div>
+      <span class="device-name" id="stageTitle" hidden>iPhone 15 Pro</span>
+    </section>
+
+    <div class="popover hidden" id="popover"></div>
+    <div class="toast hidden" id="toast" role="status"></div>
+    <div class="lightbox hidden" id="lightbox">
+      <button class="lb-x" type="button" id="lbClose" aria-label="Close">×</button>
+      <button class="lb-nav" type="button" id="lbPrev" aria-label="Previous image">‹</button>
+      <figure class="lb-frame">
+        <img id="lbImg" alt="">
+        <figcaption>
+          <span id="lbName"></span>
+          <span id="lbPos"></span>
+          <button type="button" id="lbDown">Download this image</button>
+        </figcaption>
+      </figure>
+      <button class="lb-nav" type="button" id="lbNext" aria-label="Next image">›</button>
+    </div>
+    <input id="file" type="file" accept=".html,.htm,.zip,text/html" hidden>
+
+    <div class="stubs" hidden>
+      <button type="button" id="helpBtn"></button>
+      <button type="button" id="gearBtn"></button>
+      <button type="button" id="helpPill"></button>
+      <button type="button" id="helpTop"></button>
+      <button type="button" id="moonBtn"></button>
+      <button type="button" id="accountSide"></button>
+      <button type="button" id="newChatSide"></button>
+      <button type="button" id="accountPill"></button>
+      <button type="button" id="bellBtn"></button>
+      <button type="button" id="chatMenu"></button>
+      <button type="button" id="themeBtn"></button>
+      <div class="pills">
+        <button type="button" data-view="dash"></button>
+        <button type="button" data-view="chat" class="active"></button>
+      </div>
+      <button type="button" data-view="history"></button>
+    </div>
+  </div>
+  <div class="settings-shell hidden" id="settingsShell">
+    <aside class="settings-side">
+      <button class="settings-back" type="button" id="settingsBack"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6 9 12l6 6"/></svg>Settings</button>
+      <button class="set-link on" type="button" data-panel="interface">Interface</button>
+      <button class="set-link" type="button" data-panel="capture">Capture</button>
+      <div class="side-label">Workspace</div>
+      <button class="set-link" type="button" data-panel="history">History</button>
+    </aside>
+    <main class="settings-main">
+      <div class="settings-top" id="settingsTop">Interface</div>
+      <section class="set-panel" id="panel-interface">
+        <h1>Interface</h1>
+        <p class="set-lead">These change this computer only. There is no account to sign in to.</p>
+        <h2>General</h2>
+        <div class="set-card">
+          <div class="set-row">
+            <div><strong>Suggestions</strong><p>Show the starter prompts under the box on the home screen.</p></div>
+            <button class="switch" type="button" id="prefSuggestions" role="switch" aria-checked="true"></button>
+          </div>
+          <div class="set-row">
+            <div><strong>Sound</strong><p>Play a short tone when a capture finishes and this window is in the background.</p></div>
+            <button class="switch" type="button" id="prefSound" role="switch" aria-checked="false"></button>
+          </div>
+        </div>
+        <h2>Appearance</h2>
+        <div class="set-card">
+          <div class="set-row">
+            <div><strong>Chat position</strong><p>Which side of the screen the conversation sits on.</p></div>
+            <div class="side-seg" id="prefChatSide" role="group" aria-label="Chat position">
+              <button type="button" data-side="left">Left</button>
+              <button type="button" data-side="right">Right</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div><strong>Theme</strong><p>Choose the color of this screen.</p></div>
+            <div class="theme-seg" id="settingsTheme" role="group" aria-label="Theme">
+              <button type="button" data-theme="system" data-tip="System" aria-label="System theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>
+              <button type="button" data-theme="light" data-tip="Light" aria-label="Light theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg></button>
+              <button type="button" data-theme="dark" data-tip="Dark" aria-label="Dark theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="set-panel hidden" id="panel-capture">
+        <h1>Capture</h1>
+        <p class="set-lead">Gallery files and the width of the columns.</p>
+        <div class="set-card">
+          <div class="set-row">
+            <div><strong>Tiny images</strong><p>Include very small files in the gallery the next time you open one.</p></div>
+            <button class="switch" type="button" id="prefTiny" role="switch" aria-checked="false"></button>
+          </div>
+          <div class="set-row">
+            <div><strong>Column widths</strong><p>History, chat, and the phone go back to their own default widths.</p></div>
+            <button class="set-action" type="button" id="prefResetWidths">Reset</button>
+          </div>
+        </div>
+      </section>
+      <section class="set-panel hidden" id="panel-history">
+        <h1>History</h1>
+        <p class="set-lead" id="historyLead">Captures saved on this computer.</p>
+        <div class="set-card">
+          <div class="set-row">
+            <div><strong>This capture</strong><p>Remove the one open in the chat, including its files.</p></div>
+            <button class="set-action" type="button" id="prefRemove">Remove</button>
+          </div>
+          <div class="set-row">
+            <div><strong>Clear history</strong><p>Remove every capture on this computer. This asks you to confirm.</p></div>
+            <button class="set-action danger" type="button" id="prefClear">Clear</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="feedback hidden" id="feedback">
+    <form class="feedback-card" id="feedbackForm">
+      <h2>Feedback</h2>
+      <p>Saved on this computer. Nothing is sent anywhere.</p>
+      <textarea id="feedbackText" rows="4" placeholder="What should change?"></textarea>
+      <div class="feedback-actions">
+        <button type="button" id="feedbackCancel">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+      <ul id="feedbackList"></ul>
+    </form>
+  </div>
+  <script src="chat.js"></script>
+</body>
+</html>

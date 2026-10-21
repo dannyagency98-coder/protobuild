@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Protobuild — Capture a site on your phone</title>
+  <meta name="description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta name="application-name" content="Protobuild">
+  <meta name="title" content="Protobuild — Capture a site on your phone">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    location.replace(id ? '/?job=' + encodeURIComponent(id) : '/');
+  </script>
+</head>
+<body>
+  <p><a href="/">Open Protobuild</a></p>
+</body>
+</html>

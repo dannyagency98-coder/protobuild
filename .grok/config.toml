@@ -1,0 +1,3 @@
+# Grok project configuration
+# MCP servers here apply to this workspace only.
+permission_mode = "always-approve"
