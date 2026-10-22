@@ -168,3 +168,28 @@ export async function queueUpload(env, user, file) {
   }
   return json(created);
 }
+
+export async function cancelCaptureRun(env, jobId) {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPO || !jobId) return false;
+  const workflow = env.GITHUB_WORKFLOW_FILE || 'capture.yml';
+  const headers = {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'protobuild',
+  };
+  const listed = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/runs?per_page=15`, { headers });
+  if (!listed.ok) return false;
+  const data = await listed.json().catch(() => ({}));
+  const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+  const hit = runs.find((run) => {
+    const title = `${run.display_title || ''} ${run.name || ''}`;
+    const live = run.status === 'queued' || run.status === 'in_progress' || run.status === 'waiting' || run.status === 'pending';
+    return live && title.includes(jobId);
+  });
+  if (!hit) return false;
+  const cancelled = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${hit.id}/cancel`, {
+    method: 'POST',
+    headers,
+  });
+  return cancelled.status === 202 || cancelled.status === 204;
+}

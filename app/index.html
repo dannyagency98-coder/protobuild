@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Protobuild — Capture a site on your phone</title>
-  <meta name="description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <title>Protobuild — Capture a site on your computer</title>
+  <meta name="description" content="Paste a link on your computer. Protobuild saves the page, shows it in an iPhone preview, and lets you take the images, share a link, or download the files. The editor does not run on a phone. A shared link can.">
   <meta name="application-name" content="Protobuild">
-  <meta name="title" content="Protobuild — Capture a site on your phone">
+  <meta name="title" content="Protobuild — Capture a site on your computer">
   <meta property="og:site_name" content="Protobuild">
-  <meta property="og:title" content="Protobuild — Capture a site on your phone">
-  <meta property="og:description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta property="og:title" content="Protobuild — Capture a site on your computer">
+  <meta property="og:description" content="Paste a link on your computer. Protobuild saves the page, shows it in an iPhone preview, and lets you take the images, share a link, or download the files. The editor does not run on a phone. A shared link can.">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Protobuild — Capture a site on your phone">
-  <meta name="twitter:description" content="Name a website in the chat. Protobuild saves the page, shows it on an iPhone, and lets you grab the images, share a link, or download the files.">
+  <meta name="twitter:title" content="Protobuild — Capture a site on your computer">
+  <meta name="twitter:description" content="Paste a link on your computer. Protobuild saves the page, shows it in an iPhone preview, and lets you take the images, share a link, or download the files. The editor does not run on a phone. A shared link can.">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="/favicon.ico" sizes="32x32">
@@ -96,7 +96,7 @@
       <div class="chat-bar" id="chatBar">
         <div class="chat-heading">
           <span class="chat-title" id="chatTitle">New chat</span>
-          <button type="button" class="chat-id" id="chatId" aria-label="Copy chat id"></button>
+          <button type="button" class="chat-id" id="chatId" aria-label="Copy chat link"></button>
         </div>
         <button class="icon-quiet" type="button" id="threadMenu" data-tip="Chat actions" aria-label="Chat actions">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/></svg>
@@ -108,7 +108,7 @@
       <div class="stream" id="stream"></div>
       <form class="composer" id="composer">
         <div class="ref-row" id="refRow" hidden></div>
-        <textarea id="input" rows="2" placeholder="Paste a link, or ask me to change, download, or host it…"></textarea>
+        <textarea id="input" rows="2" placeholder="Paste a link, or ask me to change, download, or share it…"></textarea>
         <div class="composer-row">
           <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
@@ -148,12 +148,12 @@
           </div>
         </div>
         <div class="stage-actions">
-          <button class="stage-btn" type="button" data-open><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 5h5v5"/><path d="M19 5l-8 8"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg>Open</button>
-          <button class="stage-btn" type="button" data-zip><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11M7 11l5 5 5-5"/><path d="M5 19h14"/></svg>Download</button>
-          <button class="stage-btn" type="button" data-share><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="18" cy="5" r="2.2"/><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="19" r="2.2"/><path d="M8.2 11l7.6-4.2M8.2 13l7.6 4.2"/></svg>Share</button>
-          <button class="stage-btn" type="button" data-host>Host</button>
-          <button class="stage-btn" type="button" id="pickBtn">Pick</button>
-          <button class="stage-btn" type="button" id="undoBtn">Undo</button>
+          <button class="stage-btn" type="button" data-open disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 5h5v5"/><path d="M19 5l-8 8"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg><span class="btn-label">Open</span></button>
+          <button class="stage-btn" type="button" data-zip disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11M7 11l5 5 5-5"/><path d="M5 19h14"/></svg><span class="btn-label">Download</span></button>
+          <button class="stage-btn" type="button" data-share disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="18" cy="5" r="2.2"/><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="19" r="2.2"/><path d="M8.2 11l7.6-4.2M8.2 13l7.6 4.2"/></svg><span class="btn-label">Share</span></button>
+          <button class="stage-btn" type="button" data-host disabled><span class="btn-label">Host</span></button>
+          <button class="stage-btn" type="button" id="pickBtn" disabled><span class="btn-label">Pick</span></button>
+          <button class="stage-btn" type="button" id="undoBtn" disabled><span class="btn-label">Undo</span></button>
         </div>
       </div>
       <div class="stage-canvas" id="phoneView">
@@ -177,7 +177,7 @@
         <div class="gallery-tools">
           <label class="tiny-toggle"><input type="checkbox" id="tinyImgs"> Include tiny</label>
           <span id="galleryNote">No capture open</span>
-          <button class="stage-btn" type="button" id="zipImages">Download images</button>
+          <button class="stage-btn" type="button" id="zipImages" disabled><span class="btn-label">Download images</span></button>
         </div>
         <div class="shot-grid" id="imgGrid"></div>
       </div>

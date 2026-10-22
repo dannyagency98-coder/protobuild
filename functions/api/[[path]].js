@@ -1,4 +1,4 @@
-import { currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob } from '../lib/edge.js';
+import { cancelCaptureRun, currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob } from '../lib/edge.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
@@ -58,7 +58,7 @@ export async function onRequest(context) {
   if (jobAction && !jobAction[2] && request.method === 'GET') {
     const job = await loadJob(env, user.id, jobAction[1]);
     if (!job) return json({ error: 'Job not found' }, 404);
-    return json(publicJob(env, job));
+    return json(await jobForClient(env, job));
   }
 
   if (request.method === 'DELETE' && path.endsWith('/jobs')) {
@@ -214,12 +214,18 @@ async function handleAgent(request, env, user) {
     return sse({ reply: action === 'images' ? 'Starting the image download.' : 'Starting the download.', job: publicJob(env, job), action });
   }
 
+  if (jobId && /\b(host|publish)\b/i.test(message)) {
+    const job = await loadJob(env, user.id, jobId);
+    if (!job) return sse({ reply: 'That capture is gone.', job: null });
+    return sse({ reply: 'A separate site is not connected. Use Share for a link. That link can open on a phone.', job: await jobForClient(env, job) });
+  }
+
   if (jobId && /\b(undo|reset)\b/i.test(message)) {
     const job = await loadJob(env, user.id, jobId);
     if (!job) return sse({ reply: 'That capture is gone.', job: null });
     try { await undoChange(env, job); }
-    catch (err) { return sse({ reply: err.message || 'Nothing to undo.', job: publicJob(env, job) }); }
-    return sse({ reply: 'Undid the last edit.', job: publicJob(env, job), edited: true });
+    catch (err) { return sse({ reply: err.message || 'Nothing to undo.', job: await jobForClient(env, job) }); }
+    return sse({ reply: 'Undid the last edit.', job: await jobForClient(env, job), edited: true });
   }
 
   if (!jobId) {
@@ -337,6 +343,21 @@ function publicJob(env, job) {
   return { ...job, previewUrl: preview, shareUrl, hostedUrl: job.options?.hostedUrl || null };
 }
 
+async function jobForClient(env, job) {
+  const pub = publicJob(env, job);
+  if (!pub?.id) return pub;
+  pub.canUndo = false;
+  if (!env.R2) return pub;
+  try {
+    const obj = await env.R2.get(`sites/${job.id}/edits.json`);
+    const rows = obj ? await obj.json().catch(() => []) : [];
+    pub.canUndo = Array.isArray(rows) && rows.length > 0;
+  } catch {
+    pub.canUndo = false;
+  }
+  return pub;
+}
+
 async function shareJob(request, env, user, jobId) {
   const job = await loadJob(env, user.id, jobId);
   if (!job) return json({ error: 'Job not found' }, 404);
@@ -344,7 +365,7 @@ async function shareJob(request, env, user, jobId) {
   const body = await request.json().catch(() => ({}));
   const next = await setShare(env, job, { enabled: body.enabled !== false, days: body.expiresInDays });
   await saveJob(env, next);
-  return json(publicJob(env, next));
+  return json(await jobForClient(env, next));
 }
 
 async function applyJob(request, env, user, jobId) {
@@ -353,7 +374,7 @@ async function applyJob(request, env, user, jobId) {
   const body = await request.json().catch(() => ({}));
   try { await applyChange(env, job, body); }
   catch (err) { return json({ error: err.message || 'That change was not applied.' }, err.status || 400); }
-  return json(publicJob(env, job));
+  return json(await jobForClient(env, job));
 }
 
 async function undoJob(env, user, jobId) {
@@ -361,7 +382,7 @@ async function undoJob(env, user, jobId) {
   if (!job) return json({ error: 'Job not found' }, 404);
   try { await undoChange(env, job); }
   catch (err) { return json({ error: err.message || 'Nothing to undo.' }, err.status || 400); }
-  return json(publicJob(env, job));
+  return json(await jobForClient(env, job));
 }
 
 async function logoJob(request, env, user, jobId) {
@@ -376,7 +397,7 @@ async function logoJob(request, env, user, jobId) {
   }
   try {
     const reply = await saveLogo(env, job, `brand-logo${ext}`, await file.arrayBuffer());
-    return json({ ...publicJob(env, job), reply });
+    return json({ ...(await jobForClient(env, job)), reply });
   } catch (err) {
     return json({ error: err.message || 'That logo did not upload.' }, err.status || 400);
   }
@@ -442,6 +463,7 @@ async function stopJob(env, user, jobId) {
   if (!job) return json({ error: 'Job not found' }, 404);
   const stopped = { ...job, status: 'failed', error: 'Stopped.', finished_at: new Date().toISOString() };
   await saveJob(env, stopped);
+  await cancelCaptureRun(env, jobId).catch(() => {});
   return json(publicJob(env, stopped));
 }
 

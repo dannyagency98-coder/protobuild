@@ -26,11 +26,40 @@ function chatIdFor(jobId) {
   return id;
 }
 
+let undoMemory = false;
+let undoMemoryId = '';
+
+function chatLink() {
+  return `${location.origin}/?c=${chatId}`;
+}
+
+function syncAddress() {
+  if (!/^[a-f0-9]{8}$/.test(chatId)) return;
+  const next = `/?c=${chatId}`;
+  if (location.pathname !== '/' && location.pathname !== '') return;
+  if (location.search === `?c=${chatId}`) return;
+  history.replaceState(null, '', next);
+}
+
 function paintChatId() {
   const el = document.getElementById('chatId');
   if (!el) return;
   el.textContent = chatId;
   el.hidden = !chatId;
+  el.title = chatId ? chatLink() : '';
+  syncAddress();
+}
+
+function readStoredSession(id) {
+  try {
+    const raw = id ? localStorage.getItem('pb-session:' + id) : localStorage.getItem(SESSION_KEY);
+    const data = JSON.parse(raw || 'null');
+    if (!data || typeof data !== 'object') return null;
+    if (id && data.chatId !== id) return null;
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 function saveSession() {
@@ -46,18 +75,98 @@ function saveSession() {
         model: item.model || '',
         quotaReset: item.quotaReset || '',
       }));
-    if (!messages.length && !activeJob?.id) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ messages: [], jobId: null, chatId }));
-      paintChatId();
-      return;
-    }
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ messages, jobId: activeJob?.id || null, chatId }));
+    const payload = { messages, jobId: activeJob?.id || null, chatId };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+    localStorage.setItem('pb-session:' + chatId, JSON.stringify(payload));
     if (activeJob?.id) {
       localStorage.setItem('pb-thread:' + activeJob.id, JSON.stringify(messages));
       localStorage.setItem('pb-chat:' + activeJob.id, chatId);
     }
   } catch { /* a full browser store should not block the chat */ }
   paintChatId();
+}
+
+function setBtnLabel(el, label) {
+  if (!el) return;
+  const slot = el.querySelector('.btn-label');
+  if (slot) slot.textContent = label;
+}
+
+function tuneBtn(el, on, label, tip) {
+  if (!el) return;
+  el.disabled = !on;
+  if (label) setBtnLabel(el, label);
+  if (tip) {
+    el.dataset.tip = tip;
+    el.setAttribute('aria-label', tip);
+  } else {
+    delete el.dataset.tip;
+    el.removeAttribute('aria-label');
+  }
+}
+
+function deviceLabel() {
+  if (previewDevice === 'desktop') return 'Desktop';
+  if (previewDevice === 'tablet') return 'Tablet';
+  return 'iPhone 15 Pro';
+}
+
+function undoReady(job) {
+  if (!job || job.status !== 'done') return false;
+  if (typeof job.canUndo === 'boolean') {
+    undoMemoryId = job.id;
+    undoMemory = job.canUndo;
+    return job.canUndo;
+  }
+  return job.id === undoMemoryId && undoMemory;
+}
+
+function syncStageActions(job) {
+  const ready = !!(job && job.status === 'done' && job.id);
+  const scanning = !!(job && (job.status === 'queued' || job.status === 'running'));
+  const name = job ? siteSlug(job) : '';
+  const file = job ? zipName(job) : '';
+  const imagesFile = job ? zipName(job, 'images') : '';
+  const wait = scanning ? `Still scanning ${name}` : 'Open a finished capture';
+  tuneBtn(document.querySelector('#stageBar [data-open]'), ready && !!job.previewUrl, 'Open', ready ? `Open ${name}` : wait);
+  tuneBtn(document.querySelector('#stageBar [data-zip]'), ready, ready && file.length <= 22 ? file : 'Download', ready ? `Download ${file}` : wait);
+  tuneBtn(document.querySelector('#stageBar [data-share]'), ready, job?.shareUrl ? 'Shared' : 'Share', ready ? (job.shareUrl ? `Link for ${name} is on` : `Share ${name}`) : wait);
+  tuneBtn(document.querySelector('#stageBar [data-host]'), false, 'Host', 'Use Share. A separate site is not connected.');
+  tuneBtn(document.getElementById('pickBtn'), ready, ready ? `Pick` : 'Pick', ready ? `Pick on ${name}` : wait);
+  tuneBtn(document.getElementById('undoBtn'), undoReady(job), 'Undo', undoReady(job) ? `Undo the last edit on ${name}` : (ready ? 'Nothing to undo' : wait));
+  tuneBtn(document.getElementById('zipImages'), ready, ready && imagesFile.length <= 26 ? imagesFile : 'Download images', ready ? `Download ${imagesFile}` : wait);
+  const images = document.getElementById('viewImages');
+  if (images) {
+    images.disabled = !job?.id;
+    images.dataset.tip = job?.id ? `Images from ${name}` : 'Open a capture to see its images';
+  }
+  const previewPane = document.querySelector('#paneSwitch [data-pane="preview"]');
+  if (previewPane) previewPane.disabled = !job?.id;
+  const clear = document.getElementById('clearHist');
+  if (clear) {
+    clear.disabled = !jobs.length;
+    clear.dataset.tip = jobs.length ? `Clear ${jobs.length} chat${jobs.length === 1 ? '' : 's'}` : 'Nothing to clear';
+  }
+  const clearAll = document.getElementById('prefClear');
+  if (clearAll) clearAll.disabled = !jobs.length;
+  const remove = document.getElementById('prefRemove');
+  if (remove) {
+    remove.disabled = !job?.id;
+    remove.textContent = job?.id ? `Remove ${name}` : 'Remove';
+  }
+  const chip = document.getElementById('micBtn');
+  if (chip) {
+    chip.textContent = deviceLabel();
+    chip.dataset.tip = `Preview size: ${deviceLabel()}`;
+  }
+  const stageTitle = document.getElementById('stageTitle');
+  if (stageTitle) stageTitle.textContent = deviceLabel();
+  const box = document.getElementById('input');
+  if (box) {
+    box.placeholder = ready
+      ? `Change, download, or share ${name}…`
+      : (scanning ? `Scanning ${name}…` : 'Paste a link, or ask me to change, download, or share it…');
+  }
 }
 
 function siteSlug(job) {
@@ -483,6 +592,7 @@ function applyDevice(name) {
   });
   const frame = document.getElementById('stage');
   if (frame) frame.title = previewDevice === 'phone' ? 'iPhone preview' : (previewDevice === 'tablet' ? 'Tablet preview' : 'Desktop preview');
+  syncStageActions(activeJob);
   fitPhone();
 }
 
@@ -638,7 +748,7 @@ function showStage(job, opts = {}) {
     frame.removeAttribute('src');
     empty?.classList.remove('hidden');
   }
-  if (title) title.textContent = 'iPhone 15 Pro';
+  if (title) title.textContent = deviceLabel();
   loadGallery(job);
   const host = document.getElementById('stageHost');
   const chatTitle = document.getElementById('chatTitle');
@@ -674,19 +784,22 @@ function showStage(job, opts = {}) {
     else toast('The preview is not ready yet.');
   };
   bar.querySelector('[data-zip]').onclick = () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job));
-  bar.querySelector('[data-share]').onclick = () => share(job);
+  bar.querySelector('[data-share]').onclick = (event) => openShare(job, event.currentTarget);
   bar.querySelector('[data-host]').onclick = () => hostPage(job);
+  syncStageActions(job);
 }
 
 function previewCard(job) {
   const url = job.previewUrl || ('/preview/' + job.id + '/');
+  const file = zipName(job);
+  const shareLabel = job.shareUrl ? 'Shared' : 'Share';
   return `<div class="preview-card">
     <iframe src="${esc(url)}" title="Preview" sandbox="allow-scripts allow-forms allow-popups"></iframe>
     <div class="bar">
-      <button class="linkish" type="button" data-open>Open</button>
-      <button class="linkish" type="button" data-zip>Download files</button>
-      <button class="linkish" type="button" data-share>Share link</button>
-      <button class="linkish" type="button" data-host>Host</button>
+      <button class="linkish" type="button" data-open>Open ${esc(siteSlug(job))}</button>
+      <button class="linkish" type="button" data-zip title="Download ${esc(file)}">${esc(file)}</button>
+      <button class="linkish" type="button" data-share>${shareLabel}</button>
+      <button class="linkish" type="button" data-host disabled title="Use Share. A separate site is not connected.">Host</button>
     </div>
   </div>`;
 }
@@ -736,6 +849,7 @@ async function refreshJobs() {
   }
   if (!jobs.length) historyEl.innerHTML = '<p class="group">No captures yet. Paste a link in the chat.</p>';
   updateHistoryLead();
+  syncStageActions(activeJob);
 }
 
 async function openJob(id) {
@@ -815,7 +929,7 @@ function renderLive(box, job) {
 }
 
 function statusLine(job) {
-  if (job.status === 'done') return 'The page is in the preview. You can edit it, share it, download it, or host it on Cloudflare.';
+  if (job.status === 'done') return 'The page is in the preview. You can edit it, share it, or download it.';
   if (job.status === 'blocked') return cleanError(job.error) || 'This site blocked the scan. Attach a saved copy of the page.';
   if (job.status === 'failed' && /stopped/i.test(job.error || '')) return 'Stopped.';
   if (job.status === 'failed') return cleanError(job.error) || 'The scan did not finish. Try again, or attach a saved copy of the page.';
@@ -845,19 +959,8 @@ async function download(path, filename) {
   toast('Download started.');
 }
 
-async function hostPage(job) {
-  if (!job?.id || job.status !== 'done') { toast('The page is not ready to host.'); return; }
-  toast('Publishing to Cloudflare.');
-  try {
-    const updated = await api('/api/jobs/' + job.id + '/host', { method: 'POST', body: '{}' });
-    activeJob = updated;
-    if (updated.hostedUrl) {
-      say('ai', `Hosted on Cloudflare:\n${updated.hostedUrl}`);
-      toast('Hosted on Cloudflare.');
-    }
-  } catch (err) {
-    toast(err.message || 'Cloudflare did not accept the page.');
-  }
+function hostPage() {
+  toast('Use Share. A separate site for this capture is not connected.');
 }
 
 function absoluteLink(url) {
@@ -874,6 +977,7 @@ async function share(job, days = 7) {
       body: JSON.stringify({ enabled: days !== 'off', expiresInDays: days === 'off' ? 0 : days }),
     });
     activeJob = updated;
+    syncStageActions(updated);
     if (days === 'off') { toast('Share link turned off.'); return; }
     const link = absoluteLink(updated.shareUrl);
     if (!link) { toast('I could not turn the link on.'); return; }
@@ -1456,7 +1560,7 @@ function resetChat() {
   const host = document.getElementById('stageHost');
   if (host) host.textContent = 'Preview';
   const title = document.getElementById('stageTitle');
-  if (title) title.textContent = 'iPhone 15 Pro';
+  if (title) title.textContent = deviceLabel();
   const chatTitle = document.getElementById('chatTitle');
   if (chatTitle) chatTitle.textContent = 'New chat';
   chatId = newChatId();
@@ -1474,6 +1578,7 @@ function resetChat() {
   setView('phone');
   setWorking(false);
   setSendMode(false);
+  syncStageActions(null);
 }
 
 document.getElementById('newChat').onclick = () => {
@@ -1817,7 +1922,7 @@ function closeFeedback() {
 }
 
 function openHelp(e) {
-  showPop(`<h3>Help</h3><p class="menu-note">Name a site in the chat. Protobuild saves the page and shows it on the phone. Drag the gaps between the columns. Each one keeps its own width. The Local menu opens settings, the theme, and feedback.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
+  showPop(`<h3>Help</h3><p class="menu-note">Name a site in the chat on your computer. Protobuild saves the page and shows it in the iPhone preview. A shared link can open on a phone. Drag the gaps between the columns. Each one keeps its own width. The Local menu opens settings, the theme, and feedback.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
   wirePop({
     focus: () => fillPrompt('scan '),
     sample: () => { closePop(); onSend('scan example.com'); },
@@ -1846,7 +1951,10 @@ function openPlus(e) {
 }
 
 function openDevice(e) {
-  showPop(`<h3>iPhone 15 Pro</h3><p class="menu-note">The page is laid out at 393 by 852, with the Dynamic Island.</p><button class="menu-act" type="button" data-go="fit">Fit the preview</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
+  const laid = previewDevice === 'phone'
+    ? 'The page is laid out at 393 by 852, with the Dynamic Island.'
+    : `The preview is showing ${deviceLabel().toLowerCase()}.`;
+  showPop(`<h3>${esc(deviceLabel())}</h3><p class="menu-note">${laid}</p><button class="menu-act" type="button" data-go="fit">Fit the preview</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open ${activeJob ? esc(siteSlug(activeJob)) : 'the preview'}</button>`, e.currentTarget);
   wirePop({
     fit: () => {
       if (!document.querySelector('.app')?.classList.contains('working')) toast('Open a chat to see the phone.');
@@ -1862,10 +1970,10 @@ function openDevice(e) {
 }
 
 function openThread(e) {
-  showPop(`<h3>This chat</h3><p class="menu-note">Chat ${esc(chatId)}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat id</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob ? '' : 'disabled'}>Share</button><button class="menu-act" type="button" data-go="host" ${activeJob?.status === 'done' ? '' : 'disabled'}>Host on Cloudflare</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
+  showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act" type="button" data-go="host" disabled>Host is not connected</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
   wirePop({
     fresh: () => { closePop(); document.getElementById('newChat').click(); },
-    id: () => { copyText(chatId, 'Chat id copied.'); },
+    id: () => { copyText(chatLink(), 'Chat link copied.'); },
     images: () => {
       closePop();
       if (!activeJob) { toast('Open a capture first.'); return; }
@@ -1874,7 +1982,7 @@ function openThread(e) {
     },
     copy: () => { if (activeJob?.previewUrl) copyText(activeJob.previewUrl, 'Preview link copied.'); else toast('The preview is not ready yet.'); },
     share: () => { closePop(); if (activeJob) openShare(activeJob); },
-    host: () => { closePop(); if (activeJob) hostPage(activeJob); },
+    host: () => { closePop(); hostPage(); },
     remove: () => { if (activeJob) removeCapture(activeJob.id); },
   });
 }
@@ -2001,7 +2109,7 @@ document.getElementById('bellBtn').onclick = (e) => {
 };
 document.getElementById('chatMenu').onclick = openThread;
 document.getElementById('chatId')?.addEventListener('click', () => {
-  if (chatId) copyText(chatId, 'Chat id copied.');
+  if (chatId) copyText(chatLink(), 'Chat link copied.');
 });
 document.getElementById('threadMenu').onclick = openThread;
 document.getElementById('viewPhone').onclick = () => setView('phone');
@@ -2045,9 +2153,9 @@ document.querySelector('#stageBar [data-zip]').onclick = () => {
   if (!needCapture('download')) return;
   download('/api/jobs/' + activeJob.id + '/zip?type=full', zipName(activeJob));
 };
-document.querySelector('#stageBar [data-share]').onclick = () => {
+document.querySelector('#stageBar [data-share]').onclick = (event) => {
   if (!needCapture('share')) return;
-  share(activeJob);
+  openShare(activeJob, event.currentTarget);
 };
 document.querySelector('#stageBar [data-host]').onclick = () => {
   if (!needCapture('host')) return;
@@ -2093,7 +2201,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 document.getElementById('clearHist').onclick = (e) => askClear(e.currentTarget);
 document.getElementById('themeBtn').onclick = () => document.body.classList.remove('dim');
 document.addEventListener('click', (e) => {
-  if (!pop.classList.contains('hidden') && !pop.contains(e.target) && !e.target.closest('#helpBtn, #helpPill, #helpTop, #gearBtn, #meBtn, #accountSide, #accountPill, #chatMenu, #threadMenu, #micBtn, #bellBtn, #plusBtn, #clearHist, #prefClear')) {
+  if (!pop.classList.contains('hidden') && !pop.contains(e.target) && !e.target.closest('#helpBtn, #helpPill, #helpTop, #gearBtn, #meBtn, #accountSide, #accountPill, #chatMenu, #threadMenu, #micBtn, #bellBtn, #plusBtn, #clearHist, #prefClear, [data-share]')) {
     closePop();
   }
 });
@@ -2107,14 +2215,19 @@ document.querySelectorAll('[data-view="chat"], [data-view="dash"]').forEach((btn
 });
 document.querySelector('[data-view="history"]').onclick = () => historyEl.querySelector('.h-item')?.focus();
 
-async function restoreSession() {
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { saved = null; }
+async function restoreSession(forcedId) {
+  const wanted = /^[a-f0-9]{8}$/.test(forcedId || '') ? forcedId : '';
+  let saved = wanted ? readStoredSession(wanted) : readStoredSession();
+  if (wanted && !saved) {
+    const latest = readStoredSession();
+    if (latest?.chatId === wanted) saved = latest;
+  }
   const messages = Array.isArray(saved?.messages) ? saved.messages.filter((item) => item && item.text) : [];
-  chatId = saved?.chatId && /^[a-f0-9]{8}$/.test(saved.chatId) ? saved.chatId : newChatId();
+  chatId = wanted || (saved?.chatId && /^[a-f0-9]{8}$/.test(saved.chatId) ? saved.chatId : newChatId());
   paintChatId();
   if (!messages.length && !saved?.jobId) {
     saveSession();
+    syncStageActions(null);
     return;
   }
   restoring = true;
@@ -2125,14 +2238,15 @@ async function restoreSession() {
     if (item.model) setModel(box, item.model, item.quotaReset);
   }
   restoring = false;
-  if (!saved.jobId) {
+  if (!saved?.jobId) {
     saveSession();
+    syncStageActions(null);
     return;
   }
   try {
     const job = await api('/api/jobs/' + encodeURIComponent(saved.jobId));
     activeJob = job;
-    chatId = chatIdFor(job.id);
+    try { localStorage.setItem('pb-chat:' + job.id, chatId); } catch {}
     showStage(job);
     setSendMode(jobLive(job));
     saveSession();
@@ -2144,6 +2258,7 @@ async function restoreSession() {
   } catch {
     activeJob = null;
     saveSession();
+    syncStageActions(null);
   }
 }
 
@@ -2179,10 +2294,14 @@ document.getElementById('undoBtn')?.addEventListener('click', async () => {
 });
 
 refreshJobs().then(() => {
-  const id = new URLSearchParams(location.search).get('job');
-  if (id) {
-    history.replaceState(null, '', '/');
-    return openJob(id);
+  const params = new URLSearchParams(location.search);
+  const fromChat = params.get('c') || '';
+  const jobId = params.get('job');
+  if (/^[a-f0-9]{8}$/.test(fromChat)) {
+    const stored = readStoredSession(fromChat);
+    if (stored && (stored.messages?.length || stored.jobId)) return restoreSession(fromChat);
   }
+  if (jobId) return openJob(jobId);
+  if (/^[a-f0-9]{8}$/.test(fromChat)) return restoreSession(fromChat);
   return restoreSession();
 }).catch((err) => say('ai', err.message));

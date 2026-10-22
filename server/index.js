@@ -9,7 +9,7 @@ const { assertPublicHttpUrl } = require('./url-safety');
 const { parseCapturePrompt } = require('./prompt-parse');
 const { validateCss, cssFromInstruction } = require('./css-safe');
 const { runTurn } = require('./turn');
-const { publishSite } = require('./publish');
+
 const { localizeHtml, localizeCss, FIX_SCRIPT } = require('./preview-fix');
 
 const appDir = path.join(env.root, 'app');
@@ -714,11 +714,6 @@ async function handleApi(req, res, url) {
             try { return JSON.parse(fs.readFileSync(outlinePath, 'utf8')); }
             catch { return { sections: [] }; }
           },
-          host: async (job) => {
-            const url = await publishSite(siteDir(job.id));
-            const updated = await jobs.updateJob(job.id, { options: { ...(job.options || {}), hostedUrl: url } });
-            return { reply: `Hosted on Cloudflare: ${url}`, job: updated || job };
-          },
           writeCss: async (job, css) => {
             const checked = validateCss(css);
             if (!checked.ok) {
@@ -770,14 +765,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'POST' && parts[3] === 'host') {
-      if (job.status !== 'done') return sendJson(res, 409, { error: 'The page is still copying.' });
-      try {
-        const url = await publishSite(siteDir(id));
-        const updated = await jobs.updateJob(id, { options: { ...(job.options || {}), hostedUrl: url } });
-        return sendJson(res, 200, jobs.publicJob(updated || { ...job, options: { ...(job.options || {}), hostedUrl: url } }, originOf(req)));
-      } catch (err) {
-        return sendJson(res, 502, { error: err.message || 'Cloudflare did not accept the page.' });
-      }
+      return sendJson(res, 501, { error: 'Use the share link. Publishing a capture as its own site is not connected.' });
     }
 
     if (req.method === 'POST' && parts[3] === 'stop') {

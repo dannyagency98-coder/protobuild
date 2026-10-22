@@ -123,20 +123,9 @@ async function runTurn({ message, purpose, history, images, activeJob, onEvent, 
   }
 
   if (/\b(host|publish)\b/i.test(text)) {
-    if (!deps.host) {
-      const reply = 'Hosting is not available from this screen.';
-      onEvent?.({ type: 'token', text: reply });
-      return { reply, job: activeJob };
-    }
-    try {
-      const hosted = await deps.host(activeJob);
-      onEvent?.({ type: 'token', text: hosted.reply });
-      return { reply: hosted.reply, job: hosted.job || activeJob };
-    } catch (err) {
-      const reply = err.message || 'Cloudflare did not accept the page.';
-      onEvent?.({ type: 'token', text: reply });
-      return { reply, job: activeJob };
-    }
+    const reply = 'A separate site is not connected. Use Share for a link. That link can open on a phone.';
+    onEvent?.({ type: 'token', text: reply });
+    return { reply, job: activeJob };
   }
 
   const page = deps.readHtml ? deps.readHtml(activeJob) : '';
@@ -197,7 +186,7 @@ async function runTurn({ message, purpose, history, images, activeJob, onEvent, 
     proposals.push({ kind: 'html', jobId: activeJob.id, before: visibleText(page).slice(0, 280), after: (plan.notes[0] || 'Updated page'), html: plan.html });
   }
   if (!proposals.length) {
-    const reply = 'That change could not be applied. The page can take a new logo, new wording, a move, or styling for color, type, size, layout, borders, and spacing. Say host this when you want it on Cloudflare.';
+    const reply = 'That change could not be applied. The page can take a new logo, new wording, a move, or styling for color, type, size, layout, borders, and spacing. Use Share when you want a link.';
     onEvent?.({ type: 'token', text: reply });
     return { reply, job: activeJob, model: turn.model, quotaReset: turn.quotaReset || '', editFailed: true };
   }

@@ -251,6 +251,23 @@ function liveStatus(job) {
   }
 }
 
+function shareIsLive(job) {
+  if (!job?.share_token) return false;
+  if (!job.share_expires_at) return true;
+  const at = Date.parse(job.share_expires_at);
+  return Number.isFinite(at) && at > Date.now();
+}
+
+function canUndo(job) {
+  if (!job?.id) return false;
+  try {
+    const rows = JSON.parse(fs.readFileSync(path.join(env.root, 'out', job.id, 'edits.json'), 'utf8'));
+    return Array.isArray(rows) && rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function publicJob(job, origin) {
   if (!job) return null;
   const live = liveStatus(job);
@@ -270,8 +287,9 @@ function publicJob(job, origin) {
     created_at: job.created_at,
     finished_at: job.finished_at,
     previewUrl: `${origin}/preview/${job.id}/`,
-    shareUrl: job.share_token ? `${origin}/share/${job.share_token}/` : null,
+    shareUrl: shareIsLive(job) ? `${origin}/share/${job.share_token}/` : null,
     hostedUrl: job.options?.hostedUrl || '',
+    canUndo: canUndo(job),
   };
 }
 

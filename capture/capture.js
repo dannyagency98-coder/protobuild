@@ -95,6 +95,7 @@ async function mergeStoredJob(patch) {
     const got = await client.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key }));
     current = JSON.parse(await got.Body.transformToString());
   } catch { /* the first write creates the record */ }
+  if (current.status === 'failed' && /stopped/i.test(String(current.error || '')) && patch.status && patch.status !== 'failed') return;
   const next = { ...current, ...patch, id: current.id || JOB_ID };
   await client.send(new PutObjectCommand({
     Bucket: process.env.R2_BUCKET,
@@ -507,34 +508,42 @@ async function main() {
     await page.waitForSelector('body', { timeout: 15000 }).catch(() => {});
     await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
     note('reading', 'Waiting for styles, fonts, and pictures');
-    await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
-    await page.waitForTimeout(900);
+    await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
+    await page.waitForTimeout(200);
 
-    const consentSelectors = [
-      '#onetrust-accept-btn-handler',
-      '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
-      '#CybotCookiebotDialogBodyButtonAccept',
-      '.cc-allow', '.cc-btn.cc-allow', '.cc-dismiss',
-      '#cookieyes-consent .cky-btn-accept',
-      '.cky-btn-accept',
-      '#didomi-notice-agree-button',
-      '.qc-cmp2-summary-buttons button',
-      '[aria-label*="accept" i]',
-      '[id*="accept" i]',
-    ];
-    for (const sel of consentSelectors) {
-      try {
-        await page.locator(sel).first().click({ timeout: 400 });
-        break;
-      } catch {}
-    }
-    for (const text of ['Accept all', 'Accept All', 'Allow all', 'Allow All', 'Agree', 'I agree', 'Got it', 'OK', 'Accept']) {
-      try {
-        await page.getByRole('button', { name: new RegExp(`^${text}$`, 'i') }).first().click({ timeout: 500 });
-        break;
-      } catch {}
-    }
-    await page.waitForTimeout(1200);
+    const dismissed = await page.evaluate(() => {
+      const selectors = [
+        '#onetrust-accept-btn-handler',
+        '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+        '#CybotCookiebotDialogBodyButtonAccept',
+        '.cc-allow', '.cc-btn.cc-allow', '.cc-dismiss',
+        '#cookieyes-consent .cky-btn-accept',
+        '.cky-btn-accept',
+        '#didomi-notice-agree-button',
+      ];
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+        const box = el.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      };
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (!visible(el)) continue;
+        el.click();
+        return true;
+      }
+      const names = /^(accept all|allow all|agree|i agree|got it|ok|accept)$/i;
+      for (const el of document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')) {
+        const label = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+        if (!names.test(label) || !visible(el)) continue;
+        el.click();
+        return true;
+      }
+      return false;
+    }).catch(() => false);
+    if (dismissed) await page.waitForTimeout(300);
 
     async function wallKind() {
       const title = (await page.title()).toLowerCase();
@@ -590,7 +599,7 @@ async function main() {
 
     note('scrolling', 'Loading images that appear further down the page');
     let lastH = 0;
-    const scrollBudget = Math.min(limits.maxScrollSteps || 20, 18);
+    const scrollBudget = Math.min(limits.maxScrollSteps || 20, 8);
     for (let i = 0; i < scrollBudget; i++) {
       const h = await page.evaluate(() => document.body?.scrollHeight || document.documentElement?.scrollHeight || 0).catch(() => 0);
       if (!h || h === lastH) break;
@@ -599,15 +608,15 @@ async function main() {
         const el = document.scrollingElement || document.documentElement;
         if (el) el.scrollBy(0, window.innerHeight * 0.85);
       }).catch(() => {});
-      await page.waitForTimeout(160);
+      await page.waitForTimeout(100);
     }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await page.evaluate(async () => {
-      const imgs = [...document.images].filter((img) => !img.complete).slice(0, 30);
+      const imgs = [...document.images].filter((img) => !img.complete).slice(0, 20);
       await Promise.all(imgs.map((img) => new Promise((resolve) => {
         img.addEventListener('load', resolve, { once: true });
         img.addEventListener('error', resolve, { once: true });
-        setTimeout(resolve, 2500);
+        setTimeout(resolve, 800);
       })));
     }).catch(() => {});
 
@@ -649,17 +658,18 @@ async function main() {
         let match;
         while ((match = re.exec(style))) add(match[2]);
       });
-      return found.slice(0, 180);
+      return found.slice(0, 80);
     }).catch(() => []);
 
-    const pendingAssets = pageAssets.filter((assetUrl) => !resourceMap.has(assetUrl)).slice(0, 180);
+    const assetCap = Date.now() - started > 45000 ? 16 : 48;
+    const pendingAssets = pageAssets.filter((assetUrl) => !resourceMap.has(assetUrl)).slice(0, assetCap);
     let assetCursor = 0;
     async function pullAsset() {
       while (assetCursor < pendingAssets.length && resourceMap.size <= 450) {
         const assetUrl = pendingAssets[assetCursor++];
         if (resourceMap.has(assetUrl)) continue;
         try {
-          const extra = await context.request.get(assetUrl, { timeout: 10000 });
+          const extra = await context.request.get(assetUrl, { timeout: 4000 });
           if (!extra.ok()) continue;
           const buf = Buffer.from(await extra.body());
           const ct = (extra.headers()['content-type'] || 'application/octet-stream').toLowerCase();
@@ -673,7 +683,7 @@ async function main() {
         } catch {}
       }
     }
-    await Promise.all(Array.from({ length: 6 }, pullAsset));
+    await Promise.all(Array.from({ length: 8 }, pullAsset));
 
     let renderedCss = '';
     try {
@@ -900,7 +910,23 @@ async function uploadSite() {
   await walk(OUT_DIR, '');
 }
 
+async function wasStopped() {
+  const client = r2Client();
+  if (!client) return false;
+  try {
+    const got = await client.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: `sites/${JOB_ID}/job.json` }));
+    const current = JSON.parse(await got.Body.transformToString());
+    return current.status === 'failed' && /stopped/i.test(String(current.error || ''));
+  } catch {
+    return false;
+  }
+}
+
 async function finalize(manifest) {
+  if (await wasStopped()) {
+    console.log(`Stopped job ${JOB_ID} before packaging.`);
+    process.exit(0);
+  }
   const stats = { images: manifest.imageCount, totalMB: manifest.totalMB, warnings: manifest.warnings };
   const fullZip = path.join(ZIP_DIR, `${JOB_ID}.zip`);
   const imgZip = path.join(ZIP_DIR, `${JOB_ID}-images.zip`);
