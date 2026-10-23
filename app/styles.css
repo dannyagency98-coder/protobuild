@@ -48,6 +48,7 @@ html[data-theme="light"] {
 html, body { margin: 0; height: 100%; }
 body {
   font-family: var(--sans);
+  font-size: 16px;
   color: var(--ink);
   background: var(--bg);
   overflow: hidden;
@@ -63,6 +64,13 @@ input, textarea {
   transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
 }
 input:focus, textarea:focus, input:focus-visible, textarea:focus-visible { outline: none; }
+input::placeholder,
+textarea::placeholder {
+  font-family: inherit;
+  font-size: 1em;
+  line-height: inherit;
+  opacity: 1;
+}
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
@@ -502,9 +510,9 @@ html[data-history="off"] #splitSide {
   background: transparent;
   outline: none;
   padding: 4px 6px 8px;
-  font-size: 0.98rem;
+  font-size: 1rem;
 }
-.composer textarea::placeholder { color: var(--muted); }
+.composer textarea::placeholder { color: var(--muted); font-size: 1rem; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
 .composer-row .grow { flex: 1; }
 .tool, .chip {
