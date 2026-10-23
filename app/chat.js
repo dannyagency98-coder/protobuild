@@ -5,7 +5,28 @@ const pop = document.getElementById('popover');
 let jobs = [];
 let activeJob = null;
 let thread = [];
-const SESSION_KEY = 'pb-session';
+function accountId() {
+  const raw = readAuth()?.id || 'local';
+  return String(raw).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 48) || 'local';
+}
+function userPrefix() {
+  return 'pb-u:' + accountId() + ':';
+}
+function sessionPointerKey() {
+  return userPrefix() + 'latest';
+}
+function sessionStoreKey(id) {
+  return userPrefix() + 'session:' + id;
+}
+function threadKey(jobId) {
+  return userPrefix() + 'thread:' + jobId;
+}
+function chatMapKey(jobId) {
+  return userPrefix() + 'chat:' + jobId;
+}
+function rightsKey() {
+  return 'pb-rights:' + accountId();
+}
 let restoring = false;
 let chatId = '';
 
@@ -16,43 +37,96 @@ function newChatId() {
 }
 
 function chatIdFor(jobId) {
-  const key = 'pb-chat:' + jobId;
+  const key = chatMapKey(jobId);
   let id = '';
   try { id = localStorage.getItem(key) || ''; } catch { id = ''; }
   if (!/^[a-f0-9]{8}$/.test(id)) {
+    for (const data of listLocalChats()) {
+      if (data.jobId === jobId && /^[a-f0-9]{8}$/.test(data.chatId)) return data.chatId;
+    }
     id = newChatId();
     try { localStorage.setItem(key, id); } catch { /* keep the id in memory */ }
   }
   return id;
 }
 
+function listLocalChats() {
+  const rows = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i) || '';
+      const prefix = userPrefix() + 'session:';
+      if (!key.startsWith(prefix)) continue;
+      const id = key.slice(prefix.length);
+      if (!/^[a-f0-9]{8}$/.test(id)) continue;
+      const data = readStoredSession(id);
+      if (!data || !Array.isArray(data.messages) || !data.messages.some((item) => item && item.text)) continue;
+      rows.push(data);
+    }
+  } catch { /* a blocked store just leaves the job list */ }
+  return rows;
+}
+
 let undoMemory = false;
 let undoMemoryId = '';
+let showingOriginal = false;
+
+let addressMode = 'replace';
+let applyingHistory = false;
+
+function chatIdFromLocation() {
+  const path = location.pathname.match(/^\/c\/([a-f0-9]{8})\/?$/);
+  if (path) return path[1];
+  const query = new URLSearchParams(location.search).get('c') || '';
+  return /^[a-f0-9]{8}$/.test(query) ? query : '';
+}
 
 function chatLink() {
-  return `${location.origin}/?c=${chatId}`;
+  return `${location.origin}/c/${chatId}`;
+}
+
+function chatIsOpen() {
+  return /^[a-f0-9]{8}$/.test(chatId) && (thread.some((item) => item && item.text) || !!activeJob);
 }
 
 function syncAddress() {
-  if (!/^[a-f0-9]{8}$/.test(chatId)) return;
-  const next = `/?c=${chatId}`;
-  if (location.pathname !== '/' && location.pathname !== '') return;
-  if (location.search === `?c=${chatId}`) return;
-  history.replaceState(null, '', next);
+  const el = document.getElementById('chatId');
+  const hasId = /^[a-f0-9]{8}$/.test(chatId);
+  const linked = hasId && chatIsOpen();
+  if (el) {
+    el.hidden = !linked;
+    el.textContent = linked ? 'Copy link' : '';
+    el.title = linked ? chatLink() : '';
+  }
+  const title = document.getElementById('chatTitle');
+  if (title && !activeJob) {
+    const first = thread.find((item) => item && item.role === 'user' && item.text);
+    title.textContent = first ? String(first.text).trim().slice(0, 42) : 'New chat';
+  }
+  if (applyingHistory) return;
+  if (!hasId) {
+    if (location.pathname !== '/' || location.search) {
+      history[addressMode === 'push' ? 'pushState' : 'replaceState']({ chatId: '' }, '', '/');
+    }
+    addressMode = 'replace';
+    return;
+  }
+  const next = `/c/${chatId}`;
+  if (location.pathname.replace(/\/$/, '') === next && !location.search) {
+    addressMode = 'replace';
+    return;
+  }
+  history[addressMode === 'push' ? 'pushState' : 'replaceState']({ chatId }, '', next);
+  addressMode = 'replace';
 }
 
 function paintChatId() {
-  const el = document.getElementById('chatId');
-  if (!el) return;
-  el.textContent = chatId;
-  el.hidden = !chatId;
-  el.title = chatId ? chatLink() : '';
   syncAddress();
 }
 
 function readStoredSession(id) {
   try {
-    const raw = id ? localStorage.getItem('pb-session:' + id) : localStorage.getItem(SESSION_KEY);
+    const raw = id ? localStorage.getItem(sessionStoreKey(id)) : localStorage.getItem(sessionPointerKey());
     const data = JSON.parse(raw || 'null');
     if (!data || typeof data !== 'object') return null;
     if (id && data.chatId !== id) return null;
@@ -64,7 +138,13 @@ function readStoredSession(id) {
 
 function saveSession() {
   if (restoring) return;
-  if (!chatId) chatId = newChatId();
+  if (!chatId) {
+    if (thread.some((item) => item && item.text) || activeJob) chatId = newChatId();
+    else {
+      paintChatId();
+      return;
+    }
+  }
   try {
     const messages = thread
       .filter((item) => item && item.text)
@@ -76,11 +156,11 @@ function saveSession() {
         quotaReset: item.quotaReset || '',
       }));
     const payload = { messages, jobId: activeJob?.id || null, chatId };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
-    localStorage.setItem('pb-session:' + chatId, JSON.stringify(payload));
+    localStorage.setItem(sessionPointerKey(), JSON.stringify(payload));
+    localStorage.setItem(sessionStoreKey(chatId), JSON.stringify(payload));
     if (activeJob?.id) {
-      localStorage.setItem('pb-thread:' + activeJob.id, JSON.stringify(messages));
-      localStorage.setItem('pb-chat:' + activeJob.id, chatId);
+      localStorage.setItem(threadKey(activeJob.id), JSON.stringify(messages));
+      localStorage.setItem(chatMapKey(activeJob.id), chatId);
     }
   } catch { /* a full browser store should not block the chat */ }
   paintChatId();
@@ -98,17 +178,27 @@ function tuneBtn(el, on, label, tip) {
   if (label) setBtnLabel(el, label);
   if (tip) {
     el.dataset.tip = tip;
+    el.title = tip;
     el.setAttribute('aria-label', tip);
   } else {
     delete el.dataset.tip;
+    el.removeAttribute('title');
     el.removeAttribute('aria-label');
   }
 }
 
 function deviceLabel() {
-  if (previewDevice === 'desktop') return 'Desktop';
-  if (previewDevice === 'tablet') return 'Tablet';
-  return 'iPhone 15 Pro';
+  if (previewDevice === 'desktop') return '1440';
+  if (previewDevice === 'tablet') return '768';
+  return '390';
+}
+
+function shareExpiryLine(job) {
+  if (!job?.shareUrl) return 'Not shared';
+  if (!job.share_expires_at) return 'Until the capture expires';
+  const at = Date.parse(job.share_expires_at);
+  if (!Number.isFinite(at)) return 'Shared';
+  return 'Expires ' + new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function undoReady(job) {
@@ -127,40 +217,39 @@ function syncStageActions(job) {
   const name = job ? siteSlug(job) : '';
   const file = job ? zipName(job) : '';
   const imagesFile = job ? zipName(job, 'images') : '';
-  const wait = scanning ? `Still scanning ${name}` : 'Open a finished capture';
+  const wait = 'Available when the preview finishes.';
   tuneBtn(document.querySelector('#stageBar [data-open]'), ready && !!job.previewUrl, 'Open', ready ? `Open ${name}` : wait);
-  tuneBtn(document.querySelector('#stageBar [data-zip]'), ready, ready && file.length <= 22 ? file : 'Download', ready ? `Download ${file}` : wait);
-  tuneBtn(document.querySelector('#stageBar [data-share]'), ready, job?.shareUrl ? 'Shared' : 'Share', ready ? (job.shareUrl ? `Link for ${name} is on` : `Share ${name}`) : wait);
-  tuneBtn(document.querySelector('#stageBar [data-host]'), false, 'Host', 'Use Share. A separate site is not connected.');
-  tuneBtn(document.getElementById('pickBtn'), ready, ready ? `Pick` : 'Pick', ready ? `Pick on ${name}` : wait);
-  tuneBtn(document.getElementById('undoBtn'), undoReady(job), 'Undo', undoReady(job) ? `Undo the last edit on ${name}` : (ready ? 'Nothing to undo' : wait));
-  tuneBtn(document.getElementById('zipImages'), ready, ready && imagesFile.length <= 26 ? imagesFile : 'Download images', ready ? `Download ${imagesFile}` : wait);
+  tuneBtn(document.querySelector('#stageBar [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
+  tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
+  const exp = document.getElementById('shareExp');
+  if (exp) exp.textContent = shareExpiryLine(job);
+  document.querySelectorAll('[data-share-days]').forEach((btn) => {
+    btn.disabled = !ready;
+  });
+  tuneBtn(document.getElementById('pickBtn'), ready, 'Pick', ready ? `Pick on ${name}` : wait);
+  const undoOn = undoReady(job);
+  const undoWhat = job?.undoLabel || 'the last change';
+  tuneBtn(document.getElementById('undoBtn'), undoOn, 'Undo', undoOn ? `Undo ${undoWhat}` : (ready ? 'Nothing to undo' : wait));
+  const compare = document.getElementById('compareBtn');
+  tuneBtn(compare, ready && undoOn, showingOriginal ? 'Edited' : 'Original', ready && undoOn ? (showingOriginal ? 'Show the edited page' : 'Show the original capture') : wait);
+  tuneBtn(document.getElementById('zipImages'), ready, 'Download all', ready ? `Download every image as ${imagesFile}` : wait);
   const images = document.getElementById('viewImages');
   if (images) {
     images.disabled = !job?.id;
     images.dataset.tip = job?.id ? `Images from ${name}` : 'Open a capture to see its images';
   }
-  const previewPane = document.querySelector('#paneSwitch [data-pane="preview"]');
-  if (previewPane) previewPane.disabled = !job?.id;
-  const clear = document.getElementById('clearHist');
-  if (clear) {
-    clear.disabled = !jobs.length;
-    clear.dataset.tip = jobs.length ? `Clear ${jobs.length} chat${jobs.length === 1 ? '' : 's'}` : 'Nothing to clear';
-  }
   const clearAll = document.getElementById('prefClear');
-  if (clearAll) clearAll.disabled = !jobs.length;
+  if (clearAll) clearAll.disabled = !jobs.length && !listLocalChats().length;
   const remove = document.getElementById('prefRemove');
   if (remove) {
-    remove.disabled = !job?.id;
-    remove.textContent = job?.id ? `Remove ${name}` : 'Remove';
-  }
-  const chip = document.getElementById('micBtn');
-  if (chip) {
-    chip.textContent = deviceLabel();
-    chip.dataset.tip = `Preview size: ${deviceLabel()}`;
+    const open = !!(job?.id || thread.some((item) => item && item.text));
+    remove.disabled = !open;
+    remove.textContent = 'Clear';
   }
   const stageTitle = document.getElementById('stageTitle');
   if (stageTitle) stageTitle.textContent = deviceLabel();
+  const frameBox = document.querySelector('.device');
+  if (frameBox) frameBox.setAttribute('aria-label', `Preview, ${deviceLabel()} wide`);
   const box = document.getElementById('input');
   if (box) {
     box.placeholder = ready
@@ -186,7 +275,7 @@ function zipName(job, kind) {
 }
 
 function clearSession() {
-  try { localStorage.removeItem(SESSION_KEY); } catch {}
+  try { localStorage.removeItem(sessionPointerKey()); } catch {}
 }
 
 function esc(s) {
@@ -195,10 +284,44 @@ function esc(s) {
   }[c]));
 }
 
-async function api(path, opts = {}) {
-  const headers = { ...(opts.headers || {}) };
+function readAuth() {
+  try { return JSON.parse(localStorage.getItem('pb-auth') || 'null'); } catch { return null; }
+}
+function saveAuth(session) {
+  localStorage.setItem('pb-auth', JSON.stringify({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token || '',
+    expires_at: session.expires_at || 0,
+    email: session.user?.email || session.email || '',
+    id: session.user?.id || session.id || '',
+  }));
+}
+function authHeaders() {
+  const token = readAuth()?.access_token;
+  return token ? { Authorization: 'Bearer ' + token } : {};
+}
+async function refreshAuth() {
+  const saved = readAuth();
+  if (!saved?.refresh_token) return null;
+  const res = await fetch('/api/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: saved.refresh_token }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.access_token) return null;
+  saveAuth(json);
+  return json;
+}
+
+async function api(path, opts = {}, retry = true) {
+  const headers = { ...authHeaders(), ...(opts.headers || {}) };
   if (opts.body && !(opts.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401 && retry && !/\/api\/auth\/(login|signup|refresh)/.test(path)) {
+    const next = await refreshAuth();
+    if (next) return api(path, opts, false);
+  }
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = { error: text }; }
@@ -220,21 +343,41 @@ function bubble(role, html, opts = {}) {
   const tools = document.createElement('div');
   tools.className = 'actions-row';
   const copy = iconBtn('copy', 'Copy', '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>');
+  const edit = iconBtn('edit', 'Edit', '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>');
   const retry = iconBtn('retry', 'Resend', '<path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/>');
-  tools.innerHTML = copy + retry;
+  tools.innerHTML = role === 'user' ? copy + edit + retry : copy + retry;
   if (opts.pending) tools.hidden = true;
   const retryBtn = tools.querySelector('[data-act="retry"]');
-  retryBtn.hidden = true;
+  if (role !== 'user') retryBtn.hidden = true;
   tools.querySelector('[data-act="copy"]').onclick = () => copyText(row.querySelector('.bubble')?.innerText || '');
-  retryBtn.onclick = () => {
-    const last = role === 'user' ? (row.querySelector('.bubble')?.innerText || '') : lastUserText();
-    if (!last) { toast('Nothing to send again.'); return; }
-    onSend(last);
-  };
+  tools.querySelector('[data-act="edit"]')?.addEventListener('click', () => beginEdit(row));
+  retryBtn.onclick = () => resendRow(row);
   row.appendChild(tools);
   stream.appendChild(row);
-  stream.scrollTop = stream.scrollHeight;
+  stickThread(role === 'user');
   return row.querySelector('.bubble');
+}
+
+function nearBottom() {
+  if (!stream) return true;
+  return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
+}
+
+let followThread = true;
+let sticking = false;
+
+function stickThread(force) {
+  const chip = document.getElementById('newText');
+  if (!stream) return;
+  if (force || followThread) {
+    sticking = true;
+    stream.scrollTop = stream.scrollHeight;
+    followThread = true;
+    chip?.classList.add('hidden');
+    setTimeout(() => { sticking = false; }, 80);
+    return;
+  }
+  chip?.classList.remove('hidden');
 }
 
 function showRetry(bubbleEl) {
@@ -246,8 +389,60 @@ function showRetry(bubbleEl) {
   if (retry) retry.hidden = false;
 }
 
+function userRowFor(row) {
+  let node = row;
+  while (node && !node.classList.contains('user')) node = node.previousElementSibling;
+  return node?.classList.contains('msg') ? node : null;
+}
+
+function cutAfter(row) {
+  const index = [...stream.querySelectorAll('.msg')].indexOf(row);
+  let node = row.nextElementSibling;
+  while (node) {
+    const next = node.nextElementSibling;
+    node.remove();
+    node = next;
+  }
+  if (index >= 0) thread = thread.slice(0, index + 1);
+  saveSession();
+}
+
+function beginEdit(row) {
+  const bubbleEl = row.querySelector('.bubble');
+  const tools = row.querySelector('.actions-row');
+  if (!bubbleEl || row.querySelector('.edit-box')) return;
+  const form = document.createElement('form');
+  form.className = 'edit-box';
+  form.innerHTML = '<textarea aria-label="Edit message"></textarea><div class="edit-actions"><button type="button" data-cancel>Cancel</button><button type="submit">Send</button></div>';
+  const area = form.querySelector('textarea');
+  area.value = bubbleEl.innerText;
+  bubbleEl.hidden = true;
+  if (tools) tools.hidden = true;
+  bubbleEl.after(form);
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  const close = () => {
+    form.remove();
+    bubbleEl.hidden = false;
+    if (tools) tools.hidden = false;
+  };
+  form.querySelector('[data-cancel]').onclick = close;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const next = area.value;
+    close();
+    resendTurn(row, next);
+  });
+}
+
+function resendRow(row) {
+  const user = userRowFor(row);
+  if (!user) { toast('Nothing to send again.'); return; }
+  resendTurn(user, user.querySelector('.bubble')?.innerText || '');
+}
+
 function isNarrow() {
-  return window.innerWidth <= 980;
+  return window.innerWidth <= 1099;
 }
 
 function closeDrawer() {
@@ -419,17 +614,36 @@ function labelSplits() {
   }
 }
 
+function historyClosed() {
+  return document.documentElement.dataset.history === 'off';
+}
+
 function applyColumns() {
   const app = document.querySelector('.app');
   if (!app) return;
   app.classList.toggle('chat-right', chatOnRight());
   labelSplits();
-  if (window.innerWidth <= 980) {
+  if (window.innerWidth <= 1099) {
     app.style.gridTemplateColumns = '';
     return;
   }
   const working = app.classList.contains('working');
   const saved = readWidths();
+  if (historyClosed() && working) {
+    const gap = working ? 10 : 0;
+    const avail = window.innerWidth - gap;
+    if (!working) app.style.gridTemplateColumns = '0px 0px minmax(0, 1fr)';
+    else {
+      const chatPx = Math.max(WIDTH_MIN.chat, saved.chat || Math.round(avail * 0.46));
+      const stagePx = Math.max(WIDTH_MIN.stage, avail - chatPx);
+      const chat = Math.max(WIDTH_MIN.chat, avail - stagePx);
+      app.style.gridTemplateColumns = chatOnRight()
+        ? `0px 0px ${avail - chat}px 10px ${chat}px`
+        : `0px 0px ${chat}px 10px ${avail - chat}px`;
+    }
+    requestAnimationFrame(fitPhone);
+    return;
+  }
   const avail = window.innerWidth - (working ? 20 : 10);
   if (!working) {
     const side = clamp(saved.side, WIDTH_MIN.side, Math.max(WIDTH_MIN.side, avail - 280));
@@ -478,7 +692,7 @@ function bindSplits() {
     let preserved = null;
     let lastMoveAt = 0;
     el.addEventListener('pointerdown', (ev) => {
-      if (ev.button !== 0 || window.innerWidth <= 980) return;
+      if (ev.button !== 0 || window.innerWidth <= 1099) return;
       ev.preventDefault();
       columnDrag = true;
       moved = false;
@@ -541,7 +755,7 @@ function bindSplits() {
       resetColumnWidths();
     });
     el.addEventListener('keydown', (ev) => {
-      if (window.innerWidth <= 980) return;
+      if (window.innerWidth <= 1099) return;
       if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
       ev.preventDefault();
       const dir = ev.key === 'ArrowRight' ? 24 : -24;
@@ -591,9 +805,45 @@ function applyDevice(name) {
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   const frame = document.getElementById('stage');
-  if (frame) frame.title = previewDevice === 'phone' ? 'iPhone preview' : (previewDevice === 'tablet' ? 'Tablet preview' : 'Desktop preview');
+  if (frame) frame.title = activeJob ? siteSlug(activeJob) : 'Site preview';
   syncStageActions(activeJob);
   fitPhone();
+}
+
+const ZOOM_STEPS = [0.3, 0.4, 0.55, 0.7, 0.85, 1, 1.15];
+let zoomMode = localStorage.getItem('pb-zoom') || 'fit';
+let lastFitScale = 0.7;
+
+function zoomScale() {
+  if (zoomMode === 'fit') return 0;
+  const n = Number(zoomMode);
+  return n > 0.2 ? n : 0;
+}
+
+function paintZoom() {
+  const btn = document.getElementById('zoomFit');
+  if (!btn) return;
+  if (zoomMode === 'fit') {
+    btn.textContent = 'Fit';
+    btn.setAttribute('aria-label', 'Fit the preview');
+  } else {
+    const pct = Math.round(Number(zoomMode) * 100);
+    btn.textContent = pct + '%';
+    btn.setAttribute('aria-label', `Zoom is ${pct} percent. Click to fit.`);
+  }
+}
+
+function setZoom(mode) {
+  zoomMode = mode;
+  localStorage.setItem('pb-zoom', mode);
+  paintZoom();
+  fitPhone();
+}
+
+function stepZoom(dir) {
+  const current = zoomMode === 'fit' ? lastFitScale : Number(zoomMode);
+  if (dir > 0) setZoom(String(ZOOM_STEPS.find((n) => n > current + 0.02) || ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+  else setZoom(String([...ZOOM_STEPS].reverse().find((n) => n < current - 0.02) || ZOOM_STEPS[0]));
 }
 
 function fitPhone() {
@@ -606,28 +856,95 @@ function fitPhone() {
     slot.style.width = '';
     slot.style.height = '';
     device.style.transform = '';
+    canvas.classList.remove('zoomed');
     return;
   }
+  const chosen = zoomScale();
   if (previewDevice !== 'phone') {
+    const s = chosen || 1;
+    lastFitScale = 1;
     slot.style.width = '100%';
     slot.style.height = '100%';
-    device.style.transform = 'none';
+    device.style.transformOrigin = 'top center';
+    device.style.transform = s === 1 ? 'none' : `scale(${s})`;
+    canvas.classList.toggle('zoomed', s > 1);
     return;
   }
-  const scale = Math.min((canvas.clientWidth - 28) / 449, (canvas.clientHeight - 16) / 892, 0.96);
-  const s = scale > 0.45 ? scale : 0.45;
-  slot.style.width = Math.round(449 * s) + 'px';
-  slot.style.height = Math.round(892 * s) + 'px';
+  const phoneW = device.offsetWidth || 390;
+  const phoneH = device.offsetHeight || 744;
+  const fit = Math.min((canvas.clientWidth - 32) / phoneW, (canvas.clientHeight - 32) / phoneH, 1);
+  const fitScale = fit > 0.22 ? fit : 0.22;
+  lastFitScale = fitScale;
+  const s = chosen || fitScale;
+  canvas.classList.toggle('zoomed', !!chosen && s > fitScale + 0.02);
+  slot.style.width = Math.round(phoneW * s) + 'px';
+  slot.style.height = Math.round(phoneH * s) + 'px';
   device.style.transformOrigin = 'top left';
   device.style.transform = `scale(${s})`;
 }
 
-function ensureRights() {
-  return Promise.resolve(true);
+function setBusy(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle('is-busy', !!on);
+  btn.disabled = !!on;
+  btn.setAttribute('aria-busy', on ? 'true' : 'false');
+}
+
+function syncVeil() {
+  const veil = document.getElementById('veil');
+  if (!veil) return;
+  const popOpen = pop && !pop.classList.contains('hidden');
+  const confirmOpen = !document.getElementById('confirm')?.classList.contains('hidden');
+  const rightsOpen = document.getElementById('rightsModal') && !document.getElementById('rightsModal').hidden;
+  const lightOpen = !document.getElementById('lightbox')?.classList.contains('hidden');
+  veil.hidden = !(popOpen || confirmOpen || rightsOpen || lightOpen);
+}
+
+function rightsGranted() {
+  try { return sessionStorage.getItem(rightsKey()) === '1'; } catch { return false; }
+}
+
+function askRights() {
+  if (rightsGranted()) return Promise.resolve(true);
+  const modal = document.getElementById('rightsModal');
+  if (!modal) return Promise.resolve(true);
+  modal.hidden = false;
+  syncVeil();
+  return new Promise((resolve) => {
+    const yes = document.getElementById('rightsYes');
+    const no = document.getElementById('rightsNo');
+    const finish = (ok) => {
+      yes.onclick = null;
+      no.onclick = null;
+      setBusy(yes, false);
+      modal.hidden = true;
+      syncVeil();
+      if (ok) {
+        try { sessionStorage.setItem(rightsKey(), '1'); } catch {}
+        resolve(true);
+        return;
+      }
+      try { sessionStorage.removeItem(rightsKey()); } catch {}
+      localStorage.removeItem('pb-auth');
+      showAuth();
+      resolve(false);
+    };
+    yes.onclick = () => {
+      setBusy(yes, true);
+      window.setTimeout(() => finish(true), 700);
+    };
+    no.onclick = () => finish(false);
+  });
 }
 
 function rightsSaved() {
-  return true;
+  return rightsGranted();
+}
+
+function rightsOk() {
+  if (rightsGranted()) return true;
+  askRights();
+  return false;
 }
 
 function jobLive(job) {
@@ -643,6 +960,12 @@ function formatElapsed(from) {
   return `${mins}:${String(secs % 60).padStart(2, '0')}`;
 }
 
+function stepSeconds(job) {
+  const start = Date.parse(job?.created_at || '');
+  if (!Number.isFinite(start)) return 0;
+  return Math.max(0, Math.floor((Date.now() - start) / 1000));
+}
+
 function paintClock() {
   const clock = jobLive(activeJob) ? formatElapsed(activeJob.created_at) : '';
   const badge = document.getElementById('stageClock');
@@ -651,6 +974,8 @@ function paintClock() {
     badge.textContent = clock;
   }
   document.querySelectorAll('.live-clock').forEach((el) => { el.textContent = clock; });
+  const secs = jobLive(activeJob) ? ` · ${stepSeconds(activeJob)}s` : '';
+  document.querySelectorAll('[data-step-sec]').forEach((el) => { el.textContent = secs; });
 }
 
 let sendToken = 0;
@@ -713,12 +1038,14 @@ function reveal(box, text) {
   box.classList.remove('is-typing');
   const tools = box.parentElement?.querySelector('.actions-row');
   if (tools) tools.hidden = false;
+  const retry = tools?.querySelector('[data-act="retry"]');
+  if (retry) retry.hidden = false;
   const html = esc(text).replace(/\n/g, '<br>').replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
   box.innerHTML = html;
   box.classList.remove('arrived');
   void box.offsetWidth;
   box.classList.add('arrived');
-  stream.scrollTop = stream.scrollHeight;
+  stickThread(false);
   saveSession();
 }
 
@@ -727,19 +1054,17 @@ function showStage(job, opts = {}) {
   const empty = document.getElementById('stageEmpty');
   const title = document.getElementById('stageTitle');
   if (!frame || !job) return;
+  if (showingOriginal && undoMemoryId && undoMemoryId !== job.id) showingOriginal = false;
   setWorking(true);
   if (empty) {
     empty.classList.toggle('busy', job.status === 'queued' || job.status === 'running');
-    if (job.status === 'done') empty.textContent = '';
-    else if (job.status === 'blocked') empty.textContent = 'This site refused the scanner.';
-    else if (job.status === 'failed' && /stopped/i.test(job.error || '')) empty.textContent = 'Stopped.';
-    else if (job.status === 'failed') empty.textContent = 'This capture did not finish.';
-    else empty.textContent = `${job.phase === 'packaging' ? 'The page is saved' : 'Opening the page'} · ${formatElapsed(job.created_at)}`;
+    paintStageEmpty(job);
   }
   const previewUrl = job.previewUrl || (job.id ? '/preview/' + job.id + '/' : '');
   const previewReady = job.status === 'done' || job.phase === 'packaging';
+  frame.title = siteSlug(job);
   if (previewReady && previewUrl) {
-    const next = opts.reload ? previewUrl + '?t=' + Date.now() : previewUrl;
+    const next = previewAddress(job, opts.reload);
     if (opts.reload || frame.getAttribute('src') !== next) frame.src = next;
     frame.classList.remove('hidden');
     empty?.classList.add('hidden');
@@ -781,12 +1106,59 @@ function showStage(job, opts = {}) {
   if (!bar || !job.id) return;
   bar.querySelector('[data-open]').onclick = () => {
     if (job.status === 'done' && job.previewUrl) window.open(job.previewUrl, '_blank', 'noopener');
-    else toast('The preview is not ready yet.');
+    else toast('Available when the preview finishes.', { error: true });
   };
   bar.querySelector('[data-zip]').onclick = () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job));
-  bar.querySelector('[data-share]').onclick = (event) => openShare(job, event.currentTarget);
-  bar.querySelector('[data-host]').onclick = () => hostPage(job);
   syncStageActions(job);
+}
+
+function previewAddress(job, reload) {
+  const base = job.previewUrl || ('/preview/' + job.id + '/');
+  const parts = [];
+  if (showingOriginal && undoReady(job)) parts.push('original=1');
+  if (reload) parts.push('t=' + Date.now());
+  return parts.length ? base + (base.includes('?') ? '&' : '?') + parts.join('&') : base;
+}
+
+const FRAME_STEPS = ['Queued', 'Opening', 'Scrolling', 'Packaging', 'Done'];
+
+function frameIndex(job) {
+  if (!job || job.status === 'queued') return 0;
+  if (job.status === 'done') return 4;
+  if (job.phase === 'packaging' || job.phase === 'saving') return 3;
+  if (job.phase === 'scrolling' || job.phase === 'reading') return 2;
+  return 1;
+}
+
+function paintStageEmpty(job) {
+  const idle = document.getElementById('emptyIdle');
+  const steps = document.getElementById('captureSteps');
+  const fail = document.getElementById('emptyFail');
+  const live = !!(job && (job.status === 'queued' || job.status === 'running'));
+  const bad = !!(job && (job.status === 'failed' || job.status === 'blocked') && !/stopped/i.test(job.error || ''));
+  if (idle) idle.hidden = live || bad;
+  if (steps) {
+    steps.hidden = !live;
+      if (live) {
+        const lines = Array.isArray(job.log) ? job.log.map((row) => row.detail || row.phase).filter(Boolean).slice(-8) : [];
+        const at = frameIndex(job);
+        const secs = stepSeconds(job);
+        const stepsHtml = FRAME_STEPS.map((label, i) => {
+          const text = i === at && job.phaseDetail ? job.phaseDetail : label;
+          const extra = i === at ? `<span class="step-sec" data-step-sec> · ${secs}s</span>` : '';
+          return `<li class="${i < at ? 'done' : i === at ? 'now' : ''}">${esc(text)}${extra}</li>`;
+        }).join('');
+        const logHtml = lines.length ? `<div class="live-log">${lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>` : '';
+        steps.innerHTML = stepsHtml + logHtml;
+        const log = steps.querySelector('.live-log');
+        if (log) log.scrollTop = log.scrollHeight;
+      }
+  }
+  if (fail) {
+    fail.hidden = !bad;
+    const text = document.getElementById('emptyFailText');
+    if (text && bad) text.textContent = job.status === 'blocked' ? 'This site refused the scanner.' : 'This capture did not finish.';
+  }
 }
 
 function previewCard(job) {
@@ -799,7 +1171,6 @@ function previewCard(job) {
       <button class="linkish" type="button" data-open>Open ${esc(siteSlug(job))}</button>
       <button class="linkish" type="button" data-zip title="Download ${esc(file)}">${esc(file)}</button>
       <button class="linkish" type="button" data-share>${shareLabel}</button>
-      <button class="linkish" type="button" data-host disabled title="Use Share. A separate site is not connected.">Host</button>
     </div>
   </div>`;
 }
@@ -807,6 +1178,10 @@ function previewCard(job) {
 async function refreshJobs() {
   const data = await api('/api/jobs');
   jobs = data.jobs || [];
+  renderHistory();
+}
+
+function renderHistory() {
   const today = new Date().toDateString();
   const groups = { Today: [], Earlier: [] };
   for (const job of jobs) {
@@ -827,16 +1202,19 @@ async function refreshJobs() {
       btn.type = 'button';
       btn.className = 'h-item' + (activeJob?.id === job.id ? ' active' : '');
       btn.dataset.id = job.id;
-      const title = job.source_url || 'Uploaded file';
-      const label = title.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const host = siteSlug(job);
+      const word = job.status === 'done' ? 'Done' : (job.status === 'failed' ? 'Failed' : (job.status === 'blocked' ? 'Blocked' : (job.status === 'queued' ? 'Queued' : 'Running')));
       const dot = job.status === 'done' ? 'ok' : (job.status === 'failed' || job.status === 'blocked' ? 'bad' : 'wait');
-      btn.innerHTML = `<span class="dot ${dot}"></span><span class="h-text">${esc(label)}</span><span class="h-id">${esc(chatIdFor(job.id))}</span>`;
-      btn.onclick = () => openJob(job.id);
+      btn.innerHTML = `<span class="dot ${dot}"></span><span class="h-copy"><span class="h-host">${esc(host === 'page' ? 'Uploaded file' : host)}</span><span class="h-meta">${esc(word)} · ${esc(relativeTime(job.created_at))}</span></span>`;
+      btn.onclick = () => {
+        addressMode = 'push';
+        openJob(job.id);
+      };
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'h-x';
       remove.title = 'Remove';
-      remove.setAttribute('aria-label', 'Remove ' + label);
+      remove.setAttribute('aria-label', 'Remove ' + host);
       remove.textContent = '×';
       remove.onclick = (ev) => {
         ev.stopPropagation();
@@ -847,9 +1225,45 @@ async function refreshJobs() {
       historyEl.appendChild(row);
     }
   }
-  if (!jobs.length) historyEl.innerHTML = '<p class="group">No captures yet. Paste a link in the chat.</p>';
+  const seenJobs = new Set(jobs.map((job) => job.id));
+  const locals = listLocalChats().filter((data) => !data.jobId || !seenJobs.has(data.jobId));
+  if (locals.length) {
+    const g = document.createElement('div');
+    g.className = 'group';
+    g.textContent = 'Chats';
+    historyEl.appendChild(g);
+    for (const data of locals) {
+      const first = (data.messages || []).find((item) => item && item.role === 'user' && item.text);
+      const label = first ? String(first.text).trim().slice(0, 48) : 'Chat';
+      const row = document.createElement('div');
+      row.className = 'h-row';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'h-item' + (data.chatId === chatId ? ' active' : '');
+      btn.innerHTML = `<span class="dot ok"></span><span class="h-copy"><span class="h-host">${esc(label)}</span><span class="h-meta">Chat</span></span>`;
+      btn.onclick = () => openChat(data.chatId);
+      row.appendChild(btn);
+      historyEl.appendChild(row);
+    }
+  }
+  if (!jobs.length && !locals.length) historyEl.innerHTML = '<p class="group">No chats yet. Paste a link to start one.</p>';
   updateHistoryLead();
+  paintStarters();
+  filterChats();
   syncStageActions(activeJob);
+}
+
+function relativeTime(from) {
+  const at = Date.parse(from || '');
+  if (!Number.isFinite(at)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(at).toLocaleDateString();
 }
 
 async function openJob(id) {
@@ -863,6 +1277,7 @@ async function openJob(id) {
   }
   activeJob = job;
   chatId = chatIdFor(job.id);
+  addressMode = addressMode === 'push' ? 'push' : 'replace';
   paintChatId();
   closeDrawer();
   stream.innerHTML = '';
@@ -884,7 +1299,7 @@ async function openJob(id) {
   if (box && job.status === 'done') box.insertAdjacentHTML('beforeend', previewCard(job));
   if (box) wireCard(box, job);
   showStage(job);
-  stream.scrollTop = stream.scrollHeight;
+  stickThread(true);
   refreshJobs();
   setSendMode(jobLive(job));
   if (box && (job.status === 'queued' || job.status === 'running')) poll(job.id, box);
@@ -903,7 +1318,7 @@ const LIVE_STEPS = [
   ['opening', 'Opening the page'],
   ['reading', 'Reading layout and images'],
   ['scrolling', 'Loading the rest of the page'],
-  ['saving', 'Saving the copy'],
+  ['saving', 'Copying styles, fonts, and images'],
   ['packaging', 'Preparing the preview'],
 ];
 
@@ -922,10 +1337,18 @@ function renderLive(box, job) {
   const names = LIVE_STEPS.map((step) => step[0]);
   let idx = names.indexOf(job.phase);
   if (idx < 0) idx = job.status === 'running' ? 1 : 0;
+  const secs = stepSeconds(job);
+  const lines = (Array.isArray(job.log) ? job.log : []).slice(-8);
+  const log = lines.length
+    ? `<div class="live-log">${lines.map((row) => `<div>${esc(row.detail || row.phase || '')}</div>`).join('')}</div>`
+    : '';
   live.innerHTML = `<div class="live-clock">${formatElapsed(job.created_at)}</div>` + LIVE_STEPS.map((step, i) => {
     const state = i < idx ? 'done' : i === idx ? 'now' : '';
-    return `<div class="live-step ${state}">${step[1]}</div>`;
-  }).join('') + (job.phaseDetail ? `<div class="live-step">${esc(job.phaseDetail)}</div>` : '');
+    const extra = i === idx ? `<span class="step-sec" data-step-sec> · ${secs}s</span>` : '';
+    return `<div class="live-step ${state}">${step[1]}${extra}</div>`;
+  }).join('') + log;
+  const scroller = live.querySelector('.live-log');
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
 }
 
 function statusLine(job) {
@@ -944,12 +1367,14 @@ function wireCard(box, job) {
   box.querySelector('[data-open]')?.addEventListener('click', () => window.open(job.previewUrl, '_blank', 'noopener'));
   box.querySelector('[data-zip]')?.addEventListener('click', () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job)));
   box.querySelector('[data-share]')?.addEventListener('click', (event) => openShare(job, event.currentTarget));
-  box.querySelector('[data-host]')?.addEventListener('click', () => hostPage(job));
 }
 
 async function download(path, filename) {
   const res = await fetch(path);
-  if (!res.ok) { toast('The files are not ready yet.'); return; }
+  if (!res.ok) {
+    toast('The files are not ready yet.', { error: true, retry: () => download(path, filename) });
+    return;
+  }
   const blob = await res.blob();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -960,7 +1385,8 @@ async function download(path, filename) {
 }
 
 function hostPage() {
-  toast('Use Share. A separate site for this capture is not connected.');
+  if (!activeJob || activeJob.status !== 'done') { toast('The preview is not ready to host.'); return; }
+  share(activeJob, 7);
 }
 
 function absoluteLink(url) {
@@ -988,15 +1414,12 @@ async function share(job, days = 7) {
   }
 }
 
-function openShare(job, anchor) {
-  if (!job) { toast('Open a capture first.'); return; }
-  showPop('<h3>Share preview</h3><p class="menu-note">The link opens the preview, including on a phone.</p><button class="menu-act" type="button" data-go="d7">7 days</button><button class="menu-act" type="button" data-go="d30">30 days</button><button class="menu-act" type="button" data-go="never">Until the capture expires</button><button class="menu-act danger" type="button" data-go="off">Turn the link off</button>', anchor || document.getElementById('threadMenu'));
-  wirePop({
-    d7: () => { closePop(); share(job, 7); },
-    d30: () => { closePop(); share(job, 30); },
-    never: () => { closePop(); share(job, 0); },
-    off: () => { closePop(); share(job, 'off'); },
-  });
+function openShare(job) {
+  if (!job || job.status !== 'done') { toast('The preview is not ready yet.'); return; }
+  const menu = document.getElementById('stageMenu');
+  if (!menu) return;
+  menu.classList.remove('hidden');
+  document.getElementById('shareExp')?.closest('.share-block')?.scrollIntoView?.({ block: 'nearest' });
 }
 
 const chimedJobs = new Set();
@@ -1006,6 +1429,8 @@ function maybeChime(job) {
   if (job.status !== 'done' && job.status !== 'failed' && job.status !== 'blocked') return;
   if (chimedJobs.has(job.id)) return;
   chimedJobs.add(job.id);
+  const name = siteSlug(job);
+  document.title = job.status === 'done' ? `${name} is ready — Protobuild` : `${name} did not finish — Protobuild`;
   if (!readPrefs().sound || !document.hidden) return;
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) return;
@@ -1028,7 +1453,7 @@ function maybeChime(job) {
 
 function savedThread(jobId) {
   try {
-    const rows = JSON.parse(localStorage.getItem('pb-thread:' + jobId) || 'null');
+    const rows = JSON.parse(localStorage.getItem(threadKey(jobId)) || 'null');
     return Array.isArray(rows) ? rows.filter((item) => item && item.text) : [];
   } catch { return []; }
 }
@@ -1036,15 +1461,26 @@ function savedThread(jobId) {
 const advised = new Set();
 const lined = new Set();
 
+async function agentFetch(body, signal) {
+  const run = () => fetch('/api/agent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+    signal,
+  });
+  let res = await run();
+  if (res.status === 401) {
+    try { await res.body?.cancel(); } catch { /* already closed */ }
+    if (await refreshAuth()) res = await run();
+  }
+  return res;
+}
+
 async function requestLine(box, job) {
   if (!box || lined.has(job.id)) return;
   lined.add(job.id);
   try {
-    const res = await fetch('/api/agent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ purpose: 'ready', activeJobId: job.id, message: job.source_url || '', history: [] }),
-    });
+    const res = await agentFetch({ purpose: 'ready', activeJobId: job.id, message: job.source_url || '', history: [] });
     const type = res.headers.get('content-type') || '';
     if (!res.ok || !type.includes('text/event-stream')) return;
     const last = [...thread].reverse().find((item) => item.role === 'ai');
@@ -1064,15 +1500,11 @@ async function advise(box, job) {
   if (!box || advised.has(job.id)) return;
   advised.add(job.id);
   try {
-    const res = await fetch('/api/agent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: `The capture of ${job.source_url || 'that page'} ended as ${job.status}. ${job.error || ''} Tell the user what to try next in two sentences. Do not call any tool.`,
-        history: thread.slice(-20).map((item) => ({ role: item.role, text: item.text })),
-        activeJobId: job.id,
-        rights_confirmed: true,
-      }),
+    const res = await agentFetch({
+      message: `The capture of ${job.source_url || 'that page'} ended as ${job.status}. ${job.error || ''} Tell the user what to try next in two sentences. Do not call any tool.`,
+      history: thread.slice(-20).map((item) => ({ role: item.role, text: item.text })),
+      activeJobId: job.id,
+      rights_confirmed: true,
     });
     const type = res.headers.get('content-type') || '';
     if (!res.ok || !type.includes('text/event-stream')) return;
@@ -1126,7 +1558,7 @@ async function poll(id, box) {
         deliver(job, kind);
       }
       showStage(job);
-      stream.scrollTop = stream.scrollHeight;
+      stickThread(false);
       refreshJobs();
       return;
     }
@@ -1171,6 +1603,7 @@ async function uploadLogo(file) {
 
 async function uploadFile(file) {
   if (activeJob?.status === 'done' && /^image\//.test(file.type || '')) return uploadLogo(file);
+  if (!rightsOk('scan upload')) return;
   const token = ++sendToken;
   setSendMode(true);
   const sent = say('user', file.name);
@@ -1222,8 +1655,10 @@ function paint(box, text) {
   box.classList.remove('is-typing');
   const tools = box.parentElement?.querySelector('.actions-row');
   if (tools) tools.hidden = false;
+  const retry = tools?.querySelector('[data-act="retry"]');
+  if (retry) retry.hidden = false;
   box.innerHTML = esc(text).replace(/\n/g, '<br>').replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
-  stream.scrollTop = stream.scrollHeight;
+  stickThread(false);
 }
 
 function setModel(box, model, quotaReset) {
@@ -1232,21 +1667,7 @@ function setModel(box, model, quotaReset) {
     if (model) last.model = model;
     if (quotaReset) last.quotaReset = quotaReset;
   }
-  if (!box || !model) return;
-  let tag = box.parentElement?.querySelector('.model-tag');
-  if (!tag) {
-    tag = document.createElement('div');
-    tag.className = 'model-tag';
-    box.insertAdjacentElement('afterend', tag);
-  }
-  let when = '';
-  if (quotaReset) {
-    const back = new Date(quotaReset);
-    if (!Number.isNaN(back.getTime())) {
-      when = ` · back ${back.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
-    }
-  }
-  tag.textContent = `${model}${when}`;
+  box?.parentElement?.querySelector('.model-tag')?.remove();
 }
 
 function showProposal(box, proposal) {
@@ -1270,7 +1691,7 @@ function showProposal(box, proposal) {
     }
   };
   box.appendChild(card);
-  stream.scrollTop = stream.scrollHeight;
+  stickThread(false);
 }
 
 async function readEvents(res, onEvent) {
@@ -1297,29 +1718,15 @@ async function readEvents(res, onEvent) {
   }
 }
 
-async function onSend(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const token = ++sendToken;
-  setSendMode(true);
-  const history = thread.slice(-20).map((item) => ({ role: item.role, text: item.text }));
-  const sent = say('user', trimmed);
-  const box = sayTyping();
-  const ctrl = new AbortController();
-  inflight = ctrl;
+async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
   try {
-    const res = await fetch('/api/agent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: trimmed,
-        history,
-        images: refs.map((item) => item.url),
-        activeJobId: activeJob?.id || null,
-        rights_confirmed: true,
-      }),
-      signal: ctrl.signal,
-    });
+    const res = await agentFetch({
+      message: trimmed,
+      history,
+      images: (images || refs).slice(0, 2).map((item) => item.url || item),
+      activeJobId: activeJob?.id || null,
+      rights_confirmed: true,
+    }, ctrl.signal);
     const type = res.headers.get('content-type') || '';
     let data = null;
     if (!type.includes('text/event-stream')) {
@@ -1372,7 +1779,7 @@ async function onSend(text) {
       else if (data.showPreview && data.job.status === 'done') {
         box.insertAdjacentHTML('beforeend', previewCard(data.job));
         wireCard(box, data.job);
-        stream.scrollTop = stream.scrollHeight;
+        stickThread(false);
       }
       refreshJobs();
     }
@@ -1393,6 +1800,55 @@ async function onSend(text) {
   }
 }
 
+async function onSend(text, images) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  if (!rightsOk(trimmed)) return;
+  if (!/^[a-f0-9]{8}$/.test(chatId)) {
+    chatId = newChatId();
+    addressMode = 'push';
+  }
+  const shots = (images || refs).slice(0, 2);
+  const history = thread.slice(-20).map((item) => ({ role: item.role, text: item.text }));
+  const token = ++sendToken;
+  setSendMode(true);
+  const sent = say('user', shots.length ? `${trimmed}\n${shots.length} reference image${shots.length === 1 ? '' : 's'}` : trimmed);
+  const box = sayTyping();
+  const ctrl = new AbortController();
+  inflight = ctrl;
+  await runAgent({ token, trimmed, history, box, sent, ctrl, images: shots });
+}
+
+async function resendTurn(userRow, text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) { toast('Write a message first.'); return; }
+  if (!userRow) return;
+  if (!rightsOk(trimmed)) return;
+  if (!/^[a-f0-9]{8}$/.test(chatId)) {
+    chatId = newChatId();
+    addressMode = 'push';
+  }
+  const index = [...stream.querySelectorAll('.msg')].indexOf(userRow);
+  if (index < 0) return;
+  const bubbleEl = userRow.querySelector('.bubble');
+  if (bubbleEl) {
+    bubbleEl.hidden = false;
+    bubbleEl.innerHTML = esc(trimmed).replace(/\n/g, '<br>');
+  }
+  userRow.querySelector('.edit-box')?.remove();
+  const tools = userRow.querySelector('.actions-row');
+  if (tools) tools.hidden = false;
+  if (thread[index]) thread[index].text = trimmed;
+  cutAfter(userRow);
+  const history = thread.slice(0, index).slice(-20).map((item) => ({ role: item.role, text: item.text }));
+  const token = ++sendToken;
+  setSendMode(true);
+  const box = sayTyping();
+  const ctrl = new AbortController();
+  inflight = ctrl;
+  await runAgent({ token, trimmed, history, box, sent: bubbleEl, ctrl });
+}
+
 document.getElementById('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   if (document.getElementById('sendBtn').classList.contains('stop')) {
@@ -1406,8 +1862,10 @@ document.getElementById('composer').addEventListener('submit', (e) => {
     return;
   }
   input.value = '';
+  input.style.height = '';
   const outgoing = text.trim() || 'Use the attached image as a reference.';
-  onSend(outgoing);
+  const shots = refs.slice(0, 2);
+  onSend(outgoing, shots);
   refs.splice(0, refs.length);
   paintRefs();
 });
@@ -1445,6 +1903,7 @@ function setView(name) {
 
 function closeLightbox() {
   document.getElementById('lightbox')?.classList.add('hidden');
+  syncVeil();
   const img = document.getElementById('lbImg');
   if (img) img.removeAttribute('src');
   galleryIndex = -1;
@@ -1465,12 +1924,26 @@ function openLightbox(index) {
     picture.src = src;
   }
   if (label) label.textContent = `${name} · ${kb} KB`;
+  const dim = document.getElementById('lbDim');
+  if (dim) dim.textContent = '';
+  if (picture) picture.onload = () => {
+    if (dim && picture.naturalWidth) dim.textContent = `${picture.naturalWidth} × ${picture.naturalHeight}`;
+  };
   if (pos) pos.textContent = `${galleryIndex + 1} / ${gallery.length}`;
   document.getElementById('lightbox')?.classList.remove('hidden');
+  syncVeil();
   document.getElementById('lbPrev')?.classList.toggle('hidden', gallery.length < 2);
   document.getElementById('lbNext')?.classList.toggle('hidden', gallery.length < 2);
   const down = document.getElementById('lbDown');
   if (down) down.onclick = () => download(src, `${siteSlug(activeJob)}-${name}`);
+}
+
+function galleryKind(img) {
+  if (img.kind === 'product' || img.kind === 'icon' || img.kind === 'photo') return img.kind;
+  const name = String(img.local || '');
+  if (/\.svg$|\.ico$/i.test(name)) return 'icon';
+  if ((img.size || 0) > 0 && img.size < 12000) return 'icon';
+  return 'photo';
 }
 
 function renderGallery(job) {
@@ -1485,18 +1958,36 @@ function renderGallery(job) {
   if (!gallery.length) {
     const waiting = job && (job.status === 'queued' || job.status === 'running');
     grid.innerHTML = `<p class="gallery-empty">${waiting ? 'Images show up when the capture finishes.' : 'No images in this capture.'}</p>`;
+    document.querySelectorAll('[data-jump]').forEach((btn) => { btn.disabled = true; });
     return;
   }
-  grid.innerHTML = gallery.map((img, index) => {
-    const src = imageSrc(img);
-    const name = String(img.local || 'image').split('/').pop();
-    const kb = Math.max(1, Math.round((img.size || 0) / 1024));
-    return `<button type="button" class="shot" data-i="${index}">
-      <img src="${esc(src)}" alt="${esc(name)}" loading="lazy">
-      <span>${esc(name)} · ${kb} KB${img.small ? ' · tiny' : ''}</span>
-    </button>`;
+  const titles = { product: 'Products', photo: 'Photos', icon: 'Icons' };
+  grid.innerHTML = ['product', 'photo', 'icon'].map((kind) => {
+    const rows = gallery.map((img, index) => ({ img, index })).filter((row) => galleryKind(row.img) === kind);
+    if (!rows.length) return '';
+    const cards = rows.map((row, n) => {
+      const src = imageSrc(row.img);
+      const kb = Math.max(1, Math.round((row.img.size || 0) / 1024));
+      const label = `${titles[kind].replace(/s$/, '')} ${n + 1}`;
+      return `<button type="button" class="shot" data-i="${row.index}">
+        <img src="${esc(src)}" alt="${esc(label)}" loading="lazy">
+        <span>${esc(label)} · ${kb} KB</span>
+        <span class="shot-dim">Size loading</span>
+      </button>`;
+    }).join('');
+    return `<h3 class="gal-label" id="gal-${kind}">${titles[kind]}</h3><div class="gal-block ${kind}">${cards}</div>`;
   }).join('');
+  document.querySelectorAll('[data-jump]').forEach((btn) => {
+    btn.disabled = !document.getElementById('gal-' + btn.dataset.jump);
+  });
   grid.querySelectorAll('.shot img').forEach((img) => {
+    img.addEventListener('load', () => {
+      const dim = img.parentElement?.querySelector('.shot-dim');
+      if (img.naturalWidth > 0 && img.naturalWidth < 8) {
+        img.style.height = '24px';
+      }
+      if (dim && img.naturalWidth) dim.textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
+    });
     img.addEventListener('error', () => {
       const miss = document.createElement('span');
       miss.className = 'shot-miss';
@@ -1514,7 +2005,10 @@ async function loadGallery(job) {
   if (!job?.id) {
     gallery = [];
     galleryJobId = '';
-    if (countEl) countEl.textContent = '0';
+    if (countEl) {
+      countEl.textContent = '';
+      countEl.hidden = true;
+    }
     renderGallery(job);
     return;
   }
@@ -1532,7 +2026,10 @@ async function loadGallery(job) {
   gallery = data.images || [];
   galleryJobId = job.id;
   job.gallerySkipped = Number(data.skipped) || 0;
-  if (countEl) countEl.textContent = String(gallery.length);
+  if (countEl) {
+    countEl.hidden = false;
+    countEl.textContent = String(gallery.length);
+  }
   if (changedJob) closeLightbox();
   renderGallery(job);
   const autoKey = 'pb-gal:' + job.id;
@@ -1555,22 +2052,27 @@ function resetChat() {
   const empty = document.getElementById('stageEmpty');
   if (empty) {
     empty.classList.remove('hidden', 'busy');
-    empty.textContent = 'Preview';
+    paintStageEmpty(null);
   }
+  const frameTitle = document.getElementById('stage');
+  if (frameTitle) frameTitle.title = 'Site preview';
+  showingOriginal = false;
   const host = document.getElementById('stageHost');
   if (host) host.textContent = 'Preview';
   const title = document.getElementById('stageTitle');
   if (title) title.textContent = deviceLabel();
   const chatTitle = document.getElementById('chatTitle');
   if (chatTitle) chatTitle.textContent = 'New chat';
-  chatId = newChatId();
+  chatId = '';
   paintChatId();
-  saveSession();
   closeLightbox();
   gallery = [];
   galleryJobId = '';
   const count = document.getElementById('imageCount');
-  if (count) count.textContent = '0';
+  if (count) {
+    count.textContent = '';
+    count.hidden = true;
+  }
   const note = document.getElementById('galleryNote');
   if (note) note.textContent = 'No capture open';
   const grid = document.getElementById('imgGrid');
@@ -1581,13 +2083,31 @@ function resetChat() {
   syncStageActions(null);
 }
 
+function openChat(id) {
+  if (!/^[a-f0-9]{8}$/.test(id) || id === chatId) return;
+  addressMode = 'push';
+  closeSettingsPage();
+  closeDrawer();
+  restoreSession(id);
+}
+
 document.getElementById('newChat').onclick = () => {
   closeSettingsPage();
   closeDrawer();
+  if (activeJob) {
+    const job = activeJob;
+    stream.innerHTML = '';
+    thread = [];
+    chatId = newChatId();
+    addressMode = 'push';
+    say('ai', `${siteSlug(job)} stays in the preview. This is a new thread on that page.`);
+    input.focus();
+    return;
+  }
+  addressMode = 'push';
   resetChat();
   refreshJobs();
   input.focus();
-  toast('New chat.');
 };
 document.getElementById('menuBtn')?.addEventListener('click', () => {
   document.querySelector('.side')?.classList.add('open');
@@ -1596,10 +2116,6 @@ document.getElementById('menuBtn')?.addEventListener('click', () => {
 document.getElementById('drawerBackdrop')?.addEventListener('click', closeDrawer);
 document.querySelectorAll('#paneSwitch [data-pane]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.pane === 'preview' && !document.querySelector('.app')?.classList.contains('working')) {
-      toast('Start a scan to open the preview.');
-      return;
-    }
     setPane(btn.dataset.pane);
     if (btn.dataset.pane === 'preview') requestAnimationFrame(fitPhone);
   });
@@ -1608,18 +2124,27 @@ document.getElementById('homeNav').onclick = () => {
   closeSettingsPage();
   closeDrawer();
   closePop();
+  addressMode = 'push';
   resetChat();
   refreshJobs();
   input.focus();
 };
-document.getElementById('chatSearch')?.addEventListener('input', (e) => {
-  const q = e.target.value.trim().toLowerCase();
+function filterChats() {
+  const box = document.getElementById('chatSearch');
+  const q = box?.value.trim().toLowerCase() || '';
+  const clear = document.getElementById('searchClear');
+  const count = document.getElementById('searchCount');
+  if (clear) clear.hidden = !q;
   let shown = 0;
   document.querySelectorAll('.h-row').forEach((el) => {
-    const hit = el.innerText.toLowerCase().includes(q);
-    el.style.display = hit ? '' : 'none';
+    const hit = !q || el.innerText.toLowerCase().includes(q);
+    el.hidden = !hit;
     if (hit) shown += 1;
   });
+  if (count) {
+    count.hidden = !q;
+    count.textContent = `${shown} chat${shown === 1 ? '' : 's'}`;
+  }
   let empty = document.getElementById('searchEmpty');
   if (q && !shown) {
     if (!empty) {
@@ -1631,11 +2156,18 @@ document.getElementById('chatSearch')?.addEventListener('input', (e) => {
     empty.textContent = 'No chats match that.';
     empty.hidden = false;
   } else if (empty) empty.hidden = true;
+}
+document.getElementById('chatSearch')?.addEventListener('input', filterChats);
+document.getElementById('searchClear')?.addEventListener('click', () => {
+  const box = document.getElementById('chatSearch');
+  if (box) box.value = '';
+  filterChats();
+  box?.focus();
 });
 let lastInnerWidth = window.innerWidth;
 window.addEventListener('resize', () => {
   if (columnDrag) return;
-  if (window.innerWidth > 980 && lastInnerWidth > 980 && document.querySelector('.app')?.classList.contains('working')) {
+  if (window.innerWidth > 1099 && lastInnerWidth > 1099 && document.querySelector('.app')?.classList.contains('working')) {
     const saved = readWidths();
     if (saved.chat) {
       const fit = fitTrio(saved.side, saved.chat, saved.stage, window.innerWidth - 20);
@@ -1645,22 +2177,56 @@ window.addEventListener('resize', () => {
   lastInnerWidth = window.innerWidth;
   applyColumns();
 });
-document.querySelectorAll('[data-prompt]').forEach((btn) => {
-  btn.onclick = () => onSend(btn.getAttribute('data-prompt'));
-});
+function bindStarters() {
+  document.querySelectorAll('[data-prompt]').forEach((btn) => {
+    btn.onclick = () => onSend(btn.getAttribute('data-prompt'));
+  });
+}
+
+function paintStarters() {
+  const done = jobs.some((job) => job.status === 'done');
+  const items = done
+    ? [
+      ['Change the headings', 'On the open page', 'Change the headings'],
+      ['Download the images', 'Save the gallery', 'Download the images'],
+      ['Share this page', 'Copy a view link', 'Share this page'],
+    ]
+    : [
+      ['Scan example.com', 'Open a simple page', 'scan example.com'],
+      ['Scan a live site', 'Capture the real layout', 'scan https://www.apple.com'],
+      ['Images only', 'Save the pictures', 'images only https://www.wikipedia.org'],
+    ];
+  const html = items.map(([title, sub, prompt]) => `<button type="button" data-prompt="${esc(prompt)}"><strong>${esc(title)}</strong><span>${esc(sub)}</span></button>`).join('');
+  const home = document.getElementById('starters');
+  const stage = document.getElementById('stageStarters');
+  if (home) home.innerHTML = html;
+  if (stage) stage.innerHTML = html;
+  bindStarters();
+}
+paintStarters();
 
 function lastUserText() {
   return thread.filter((item) => item.role === 'user').slice(-1)[0]?.text || '';
 }
 
 let toastTimer = 0;
-function toast(text) {
+function toast(text, opts = {}) {
   const el = document.getElementById('toast');
+  const label = document.getElementById('toastText');
+  const retry = document.getElementById('toastRetry');
+  const close = document.getElementById('toastClose');
   if (!el) return;
-  el.textContent = text;
+  if (label) label.textContent = text;
+  else el.textContent = text;
+  el.classList.toggle('is-error', !!opts.error);
   el.classList.remove('hidden');
+  if (retry) {
+    retry.hidden = typeof opts.retry !== 'function';
+    retry.onclick = typeof opts.retry === 'function' ? () => { el.classList.add('hidden'); opts.retry(); } : null;
+  }
+  if (close) close.onclick = () => el.classList.add('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+  if (!opts.error) toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
 }
 
 async function copyText(text, ok = 'Copied.') {
@@ -1690,16 +2256,43 @@ async function copyText(text, ok = 'Copied.') {
 function closePop() {
   pop.classList.add('hidden');
   pop.classList.remove('account-menu');
+  syncVeil();
+}
+
+function confirmAsk({ title, body, ok = 'Confirm', danger = false }) {
+  const root = document.getElementById('confirm');
+  const heading = document.getElementById('confirmTitle');
+  const copy = document.getElementById('confirmBody');
+  const yes = document.getElementById('confirmYes');
+  if (!root || !yes) return Promise.resolve(true);
+  if (heading) heading.textContent = title;
+  if (copy) copy.textContent = body;
+  yes.textContent = ok;
+  yes.classList.toggle('danger', !!danger);
+  root.classList.remove('hidden');
+  syncVeil();
+  yes.focus();
+  return new Promise((resolve) => {
+    const finish = (answer) => {
+      root.classList.add('hidden');
+      syncVeil();
+      root.querySelectorAll('[data-yes], [data-no]').forEach((btn) => { btn.onclick = null; });
+      resolve(answer);
+    };
+    root.querySelectorAll('[data-yes]').forEach((btn) => { btn.onclick = () => finish(true); });
+    root.querySelectorAll('[data-no]').forEach((btn) => { btn.onclick = () => finish(false); });
+  });
 }
 
 function showPop(html, anchor) {
   pop.classList.remove('account-menu');
   pop.innerHTML = html;
   pop.classList.remove('hidden');
+  syncVeil();
   const rect = (anchor || document.getElementById('helpBtn')).getBoundingClientRect();
   const side = document.querySelector('.side').getBoundingClientRect();
   const inSide = rect.left >= side.left - 2 && rect.right <= side.right + 2;
-  const width = inSide ? Math.max(200, side.width - 16) : 280;
+  const width = inSide ? Math.min(220, Math.max(180, side.width - 16)) : 220;
   let left = inSide ? side.left + 8 : rect.left;
   if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
   pop.style.width = width + 'px';
@@ -1734,45 +2327,73 @@ function fillPrompt(text) {
 }
 
 async function removeCapture(id) {
+  const job = jobs.find((item) => item.id === id);
+  const name = String(job?.source_url || 'this capture').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const yes = await confirmAsk({
+    title: 'Remove this capture?',
+    body: `${name} and its saved files will be deleted from this computer.`,
+    ok: 'Remove',
+    danger: true,
+  });
+  if (!yes) return;
+  jobs = jobs.filter((item) => item.id !== id);
   try {
-    await api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' });
-    try {
-      localStorage.removeItem('pb-thread:' + id);
-      localStorage.removeItem('pb-chat:' + id);
-    } catch { /* the capture is already gone */ }
-    if (activeJob?.id === id) resetChat();
-    await refreshJobs();
-    toast('Capture removed.');
-    closePop();
-  } catch (err) {
-    toast(err.message);
-  }
+    const sessionId = chatIdFor(id);
+    localStorage.removeItem(threadKey(id));
+    localStorage.removeItem(chatMapKey(id));
+    if (sessionId) localStorage.removeItem(sessionStoreKey(sessionId));
+  } catch { /* the capture is already gone */ }
+  if (activeJob?.id === id) resetChat();
+  else renderHistory();
+  closePop();
+  toast('Capture removed.');
+  api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch((err) => toast(err.message));
 }
 
 async function clearHistory() {
+  jobs = [];
   try {
-    const data = await api('/api/jobs', { method: 'DELETE' });
-    try {
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i += 1) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith('pb-thread:') || key.startsWith('pb-chat:'))) keys.push(key);
-      }
-      keys.forEach((key) => localStorage.removeItem(key));
-    } catch { /* history is already cleared on the server */ }
-    resetChat();
-    await refreshJobs();
-    closePop();
-    toast(data.removed ? `Cleared ${data.removed} capture${data.removed === 1 ? '' : 's'}.` : 'History is already empty.');
-  } catch (err) {
-    toast(err.message);
-  }
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(userPrefix())) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch { /* history is already cleared on the server */ }
+  resetChat();
+  renderHistory();
+  closePop();
+  toast('History cleared.');
+  api('/api/jobs', { method: 'DELETE' }).catch((err) => toast(err.message));
 }
 
-function askClear(anchor) {
-  if (!jobs.length) { toast('History is already empty.'); return; }
-  showPop(`<h3>Clear history</h3><p class="menu-note">This removes every capture on this computer, including the saved pages and zip files.</p><button class="menu-act danger" type="button" data-go="yes">Clear ${jobs.length} capture${jobs.length === 1 ? '' : 's'}</button><button class="menu-act" type="button" data-go="no">Cancel</button>`, anchor);
-  wirePop({ yes: clearHistory, no: closePop });
+async function clearOpenChat() {
+  const yes = await confirmAsk({
+    title: 'Clear this chat?',
+    body: 'This removes the open chat for this sign-in.',
+    ok: 'Clear',
+    danger: true,
+  });
+  if (!yes) return;
+  try {
+    if (chatId) localStorage.removeItem(sessionStoreKey(chatId));
+    localStorage.removeItem(sessionPointerKey());
+  } catch {}
+  resetChat();
+  await refreshJobs();
+  toast('Chat cleared.');
+}
+
+async function askClear() {
+  const count = jobs.length + listLocalChats().filter((data) => !data.jobId || !jobs.some((job) => job.id === data.jobId)).length;
+  if (!count) { toast('History is already empty.'); return; }
+  const yes = await confirmAsk({
+    title: 'Clear all history?',
+    body: 'This removes every chat and capture for this sign-in.',
+    ok: `Clear all ${count}`,
+    danger: true,
+  });
+  if (yes) await clearHistory();
 }
 
 const THEME_ICONS = {
@@ -1822,12 +2443,14 @@ function paintSideButtons(side) {
 function updateHistoryLead() {
   const lead = document.getElementById('historyLead');
   if (!lead) return;
-  lead.textContent = jobs.length
-    ? `${jobs.length} capture${jobs.length === 1 ? '' : 's'} saved on this computer.`
-    : 'No captures saved on this computer yet.';
+  const extra = listLocalChats().filter((data) => !data.jobId || !jobs.some((job) => job.id === data.jobId)).length;
+  const count = jobs.length + extra;
+  lead.textContent = count
+    ? `${count} chat${count === 1 ? '' : 's'} for this sign-in.`
+    : 'No chats for this sign-in yet.';
 }
 
-const PANEL_TITLES = { interface: 'Interface', capture: 'Capture', history: 'History' };
+const PANEL_TITLES = { account: 'Account', interface: 'Interface', capture: 'Capture', history: 'History' };
 
 function showSettingsPanel(name) {
   const panel = PANEL_TITLES[name] ? name : 'interface';
@@ -1840,6 +2463,15 @@ function showSettingsPanel(name) {
   const top = document.getElementById('settingsTop');
   if (top) top.textContent = PANEL_TITLES[panel];
   if (panel === 'history') updateHistoryLead();
+  if (panel === 'account') paintAccountPage();
+}
+
+function paintAccountPage() {
+  const email = readAuth()?.email || 'This computer';
+  const label = document.getElementById('accountPageEmail');
+  if (label) label.textContent = email;
+  const images = document.getElementById('acctImages');
+  if (images) images.disabled = !activeJob;
 }
 
 function openSettingsPage(panel) {
@@ -1858,37 +2490,10 @@ function closeSettingsPage() {
   markHome();
 }
 
-function openAccount(e) {
-  if (!pop.classList.contains('hidden') && pop.classList.contains('account-menu')) {
-    closePop();
-    return;
-  }
-  showPop(`<div class="acct-id"><span class="ava"></span><div><b>Local</b><span>This computer</span></div></div><button class="menu-act" type="button" data-go="settings"><span>Settings</span></button><button class="menu-act" type="button" data-go="feedback"><span>Feedback</span></button><div class="acct-row theme-row"><span>Theme</span>${themeSegHtml()}</div><button class="menu-act" type="button" data-go="more"><span>More</span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button><div class="more-box hidden" id="moreBox"><button class="menu-act" type="button" data-go="help">Help</button><button class="menu-act" type="button" data-go="upload">Upload a saved page</button><button class="menu-act" type="button" data-go="widths">Reset column widths</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button></div>`, e.currentTarget);
-  pop.classList.add('account-menu');
-  paintThemeButtons(readPrefs().theme);
-  pop.querySelectorAll('[data-theme]').forEach((btn) => {
-    btn.onclick = (ev) => {
-      ev.stopPropagation();
-      writePrefs({ theme: btn.dataset.theme });
-    };
-  });
-  wirePop({
-    settings: () => openSettingsPage('interface'),
-    feedback: () => { closePop(); openFeedback(); },
-    more: (btn) => {
-      document.getElementById('moreBox')?.classList.toggle('hidden');
-      btn.classList.toggle('on');
-    },
-    help: () => openHelp({ currentTarget: document.getElementById('meBtn') }),
-    upload: () => { closePop(); document.getElementById('file').click(); },
-    widths: () => { closePop(); resetColumnWidths(); },
-    images: () => {
-      closePop();
-      if (!activeJob) { toast('Open a capture first.'); return; }
-      setView('images');
-      loadGallery(activeJob);
-    },
-  });
+function openAccount() {
+  closePop();
+  openSettingsPage('account');
+  document.getElementById('feedbackText')?.closest('form')?.scrollIntoView?.({ block: 'nearest' });
 }
 
 function readFeedback() {
@@ -1904,11 +2509,13 @@ function renderFeedback() {
   const list = document.getElementById('feedbackList');
   if (!list) return;
   const items = readFeedback();
+  const empty = document.getElementById('feedbackEmpty');
+  if (empty) empty.hidden = items.length > 0;
   list.innerHTML = items.map((item) => `<li>${esc(item.text)}</li>`).join('');
 }
 
 function openFeedback() {
-  document.getElementById('feedback')?.classList.remove('hidden');
+  openAccount();
   renderFeedback();
   const box = document.getElementById('feedbackText');
   if (box) {
@@ -1918,7 +2525,8 @@ function openFeedback() {
 }
 
 function closeFeedback() {
-  document.getElementById('feedback')?.classList.add('hidden');
+  const box = document.getElementById('feedbackText');
+  if (box) box.value = '';
 }
 
 function openHelp(e) {
@@ -1942,23 +2550,33 @@ function openHelp(e) {
 }
 
 function openPlus(e) {
-  showPop(`<h3>Start</h3><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="images">Images only</button><button class="menu-act" type="button" data-go="file">Upload a saved page</button>`, e.currentTarget);
+  showPop(`<h3>Start</h3><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Images only</button><button class="menu-act" type="button" data-go="file">Upload a saved page</button>`, e.currentTarget);
+  const field = document.getElementById('scanUrl');
+  document.getElementById('scanUrlForm')?.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const raw = field?.value.trim() || '';
+    if (!raw) { field?.focus(); return; }
+    closePop();
+    onSend(`scan ${raw}`);
+  });
   wirePop({
-    scan: () => fillPrompt('scan '),
-    images: () => fillPrompt('images only '),
+    images: () => {
+      const raw = field?.value.trim();
+      if (raw) { closePop(); onSend(`images only ${raw}`); }
+      else fillPrompt('images only ');
+    },
     file: () => { closePop(); document.getElementById('file').click(); },
   });
+  setTimeout(() => field?.focus(), 40);
 }
 
 function openDevice(e) {
-  const laid = previewDevice === 'phone'
-    ? 'The page is laid out at 393 by 852, with the Dynamic Island.'
-    : `The preview is showing ${deviceLabel().toLowerCase()}.`;
+  const laid = `The frame is ${deviceLabel()} pixels wide. Zoom sits next to Desktop, Tablet, and Phone. Chrome hides the black island.`;
   showPop(`<h3>${esc(deviceLabel())}</h3><p class="menu-note">${laid}</p><button class="menu-act" type="button" data-go="fit">Fit the preview</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open ${activeJob ? esc(siteSlug(activeJob)) : 'the preview'}</button>`, e.currentTarget);
   wirePop({
     fit: () => {
       if (!document.querySelector('.app')?.classList.contains('working')) toast('Open a chat to see the phone.');
-      else { fitPhone(); toast('Preview fitted.'); }
+      else { setZoom('fit'); toast('Preview fitted.'); }
       closePop();
     },
     open: () => {
@@ -1970,7 +2588,7 @@ function openDevice(e) {
 }
 
 function openThread(e) {
-  showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act" type="button" data-go="host" disabled>Host is not connected</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
+  showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
   wirePop({
     fresh: () => { closePop(); document.getElementById('newChat').click(); },
     id: () => { copyText(chatLink(), 'Chat link copied.'); },
@@ -1982,17 +2600,13 @@ function openThread(e) {
     },
     copy: () => { if (activeJob?.previewUrl) copyText(activeJob.previewUrl, 'Preview link copied.'); else toast('The preview is not ready yet.'); },
     share: () => { closePop(); if (activeJob) openShare(activeJob); },
-    host: () => { closePop(); hostPage(); },
     remove: () => { if (activeJob) removeCapture(activeJob.id); },
   });
 }
 
 document.getElementById('plusBtn').onclick = openPlus;
 document.getElementById('clipBtn').onclick = () => document.getElementById('file').click();
-document.getElementById('uploadNav').onclick = () => {
-  closeSettingsPage();
-  document.getElementById('file').click();
-};
+document.getElementById('stageUpload')?.addEventListener('click', () => document.getElementById('file').click());
 const refs = [];
 
 function paintRefs() {
@@ -2015,7 +2629,7 @@ function addReference(file) {
     uploadFile(file).catch((err) => say('ai', err.message));
     return;
   }
-  if (refs.length >= 3) { toast('Three reference images at a time.'); return; }
+  if (refs.length >= 2) { toast('Two reference images at a time.'); return; }
   if (file.size > 1500000) { toast('That image is over 1.5 MB.'); return; }
   const reader = new FileReader();
   reader.onload = () => {
@@ -2031,19 +2645,23 @@ document.getElementById('file').onchange = (e) => {
   if (file) addReference(file);
 };
 
-const composer = document.getElementById('composer');
+const chatPane = document.querySelector('.chat');
+const dropOverlay = document.getElementById('dropOverlay');
 ['dragenter', 'dragover'].forEach((name) => {
-  composer.addEventListener(name, (event) => {
+  chatPane?.addEventListener(name, (event) => {
     if (![...event.dataTransfer?.items || []].some((item) => item.kind === 'file')) return;
     event.preventDefault();
-    composer.classList.add('drop-on');
+    if (dropOverlay) dropOverlay.hidden = false;
   });
 });
-composer.addEventListener('dragleave', () => composer.classList.remove('drop-on'));
-composer.addEventListener('drop', (event) => {
+chatPane?.addEventListener('dragleave', (event) => {
+  if (event.relatedTarget && chatPane.contains(event.relatedTarget)) return;
+  if (dropOverlay) dropOverlay.hidden = true;
+});
+chatPane?.addEventListener('drop', (event) => {
   if (!event.dataTransfer?.files?.length) return;
   event.preventDefault();
-  composer.classList.remove('drop-on');
+  if (dropOverlay) dropOverlay.hidden = true;
   [...event.dataTransfer.files].slice(0, 3).forEach(addReference);
 });
 document.getElementById('helpBtn').onclick = openHelp;
@@ -2054,31 +2672,97 @@ document.getElementById('gearBtn').onclick = () => openSettingsPage('interface')
 document.getElementById('meBtn').onclick = openAccount;
 document.getElementById('accountSide').onclick = openAccount;
 document.getElementById('newChatSide').onclick = () => document.getElementById('newChat').click();
-document.getElementById('micBtn').onclick = openDevice;
 document.getElementById('accountPill').onclick = openAccount;
 document.getElementById('settingsBack').onclick = closeSettingsPage;
 document.querySelectorAll('.set-link').forEach((btn) => {
   btn.onclick = () => showSettingsPanel(btn.dataset.panel);
 });
-document.getElementById('prefSuggestions').onclick = () => writePrefs({ suggestions: !readPrefs().suggestions });
-document.getElementById('prefSound').onclick = () => writePrefs({ sound: !readPrefs().sound });
-document.getElementById('prefTiny').onclick = () => writePrefs({ tiny: !readPrefs().tiny });
+document.getElementById('prefSuggestions').onclick = () => {
+  writePrefs({ suggestions: !readPrefs().suggestions });
+};
+document.getElementById('prefSound').onclick = () => {
+  writePrefs({ sound: !readPrefs().sound });
+};
+document.getElementById('prefTiny').onclick = () => {
+  writePrefs({ tiny: !readPrefs().tiny });
+};
+document.getElementById('prefPassword').onclick = () => {
+  const form = document.getElementById('passForm');
+  form.hidden = false;
+  document.getElementById('passCurrent')?.focus();
+};
+document.getElementById('passCancel').onclick = () => {
+  const form = document.getElementById('passForm');
+  form.reset();
+  form.hidden = true;
+  const error = document.getElementById('passError');
+  if (error) { error.hidden = true; error.textContent = ''; }
+};
+document.getElementById('passForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const current = document.getElementById('passCurrent').value;
+  const next = document.getElementById('passNext').value;
+  const confirm = document.getElementById('passConfirm').value;
+  const error = document.getElementById('passError');
+  const showError = (text) => { error.textContent = text; error.hidden = false; };
+  error.hidden = true;
+  if (next.length < 6) { showError('Use a password of at least 6 characters.'); return; }
+  if (next !== confirm) { showError('Those new passwords do not match.'); return; }
+  const yes = await confirmAsk({ title: 'Change password?', body: 'The next sign-in uses the new password.', ok: 'Change' });
+  if (!yes) return;
+  try {
+    const session = await api('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current, password: next, confirm }),
+    });
+    if (session?.access_token) saveAuth(session);
+    e.target.reset();
+    e.target.hidden = true;
+    toast('Password changed.');
+  } catch (err) {
+    showError(err.message || 'That password was not saved.');
+  }
+});
+document.getElementById('prefSignOut').onclick = async () => {
+  const yes = await confirmAsk({ title: 'Sign out?', body: 'You will need your email and password to open Protobuild again.', ok: 'Sign out' });
+  if (!yes) return;
+  try { sessionStorage.removeItem(rightsKey()); } catch {}
+  localStorage.removeItem('pb-auth');
+  location.href = '/';
+};
 document.getElementById('prefChatSide').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-side]');
   if (!btn) return;
-  writePrefs({ chatSide: btn.dataset.side === 'right' ? 'right' : 'left' });
+  const side = btn.dataset.side === 'right' ? 'right' : 'left';
+  if (side === (readPrefs().chatSide === 'right' ? 'right' : 'left')) return;
+  writePrefs({ chatSide: side });
 });
 function onThemeClick(e) {
   const btn = e.target.closest('[data-theme]');
-  if (!btn) return;
+  if (!btn || btn.dataset.theme === readPrefs().theme) return;
   writePrefs({ theme: btn.dataset.theme });
 }
-document.getElementById('settingsTheme').addEventListener('click', onThemeClick);
-document.getElementById('sideTheme').addEventListener('click', onThemeClick);
-document.getElementById('prefResetWidths').onclick = () => resetColumnWidths();
-document.getElementById('prefRemove').onclick = () => {
+document.getElementById('settingsTheme')?.addEventListener('click', onThemeClick);
+document.getElementById('accountTheme')?.addEventListener('click', onThemeClick);
+document.getElementById('acctSettings').onclick = () => showSettingsPanel('interface');
+document.getElementById('acctUpload').onclick = () => document.getElementById('file').click();
+document.getElementById('acctWidths').onclick = () => document.getElementById('prefResetWidths').click();
+document.getElementById('acctImages').onclick = () => {
   if (!activeJob) { toast('Open a capture first.'); return; }
-  removeCapture(activeJob.id);
+  closeSettingsPage();
+  setView('images');
+  loadGallery(activeJob);
+};
+document.getElementById('acctSignOut').onclick = () => document.getElementById('prefSignOut').click();
+document.getElementById('sideTheme').addEventListener('click', onThemeClick);
+document.getElementById('prefResetWidths').onclick = async () => {
+  const yes = await confirmAsk({ title: 'Reset column widths?', body: 'History, chat, and the preview go back to their default widths.', ok: 'Reset' });
+  if (yes) resetColumnWidths();
+};
+document.getElementById('prefRemove').onclick = () => {
+  if (activeJob?.id) { removeCapture(activeJob.id); return; }
+  if (thread.some((item) => item && item.text)) { clearOpenChat(); return; }
+  toast('Open a chat first.');
 };
 document.getElementById('prefClear').onclick = (e) => askClear(e.currentTarget);
 document.getElementById('feedbackForm').addEventListener('submit', (e) => {
@@ -2094,9 +2778,6 @@ document.getElementById('feedbackForm').addEventListener('submit', (e) => {
   toast('Saved on this computer.');
 });
 document.getElementById('feedbackCancel').onclick = closeFeedback;
-document.getElementById('feedback').addEventListener('click', (e) => {
-  if (e.target.id === 'feedback') closeFeedback();
-});
 document.getElementById('bellBtn').onclick = (e) => {
   const running = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
   const body = running.length
@@ -2153,14 +2834,86 @@ document.querySelector('#stageBar [data-zip]').onclick = () => {
   if (!needCapture('download')) return;
   download('/api/jobs/' + activeJob.id + '/zip?type=full', zipName(activeJob));
 };
-document.querySelector('#stageBar [data-share]').onclick = (event) => {
-  if (!needCapture('share')) return;
-  openShare(activeJob, event.currentTarget);
-};
-document.querySelector('#stageBar [data-host]').onclick = () => {
-  if (!needCapture('host')) return;
-  hostPage(activeJob);
-};
+document.querySelectorAll('[data-share-days]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (!needCapture('share')) return;
+    const days = Number(btn.dataset.shareDays);
+    share(activeJob, days);
+  });
+});
+function reloadPreview() {
+  if (!activeJob || activeJob.status !== 'done') {
+    toast('The preview is not ready yet.');
+    return;
+  }
+  const frame = document.getElementById('stage');
+  if (frame) frame.src = previewAddress(activeJob, true);
+}
+document.getElementById('reloadBtn')?.addEventListener('click', reloadPreview);
+document.getElementById('winReload')?.addEventListener('click', reloadPreview);
+document.getElementById('zoomOut')?.addEventListener('click', () => stepZoom(-1));
+document.getElementById('zoomIn')?.addEventListener('click', () => stepZoom(1));
+document.getElementById('zoomFit')?.addEventListener('click', () => setZoom('fit'));
+paintZoom();
+let showChrome = localStorage.getItem('pb-chrome') !== 'off';
+function applyChrome() {
+  document.getElementById('phoneView')?.classList.toggle('chrome-off', !showChrome);
+  const btn = document.getElementById('chromeBtn');
+  if (!btn) return;
+  btn.classList.toggle('on', showChrome);
+  btn.setAttribute('aria-pressed', showChrome ? 'true' : 'false');
+  setBtnLabel(btn, showChrome ? 'Chrome' : 'Chrome off');
+  btn.dataset.tip = showChrome ? 'Hide the phone chrome' : 'Show the phone chrome';
+}
+document.getElementById('chromeBtn')?.addEventListener('click', () => {
+  showChrome = !showChrome;
+  localStorage.setItem('pb-chrome', showChrome ? 'on' : 'off');
+  applyChrome();
+});
+applyChrome();
+function applyHistory(on) {
+  document.documentElement.dataset.history = on ? 'on' : 'off';
+  localStorage.setItem('pb-history', on ? 'on' : 'off');
+  const btn = document.getElementById('historyToggle');
+  if (btn) {
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? 'Hide history' : 'Show history');
+    btn.dataset.tip = on ? 'Hide history' : 'Show history';
+  }
+  applyColumns();
+}
+document.getElementById('historyToggle')?.addEventListener('click', () => {
+  applyHistory(document.documentElement.dataset.history === 'off');
+});
+applyHistory(localStorage.getItem('pb-history') !== 'off');
+document.querySelectorAll('[data-jump]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.getElementById('gal-' + btn.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+stream?.addEventListener('scroll', () => {
+  if (sticking) return;
+  followThread = nearBottom();
+  if (followThread) document.getElementById('newText')?.classList.add('hidden');
+});
+document.getElementById('newText')?.addEventListener('click', () => stickThread(true));
+document.getElementById('moreBtn')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  document.getElementById('stageMenu')?.classList.toggle('hidden');
+});
+document.addEventListener('click', (event) => {
+  const menu = document.getElementById('stageMenu');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (event.target.closest('#moreBtn, #stageMenu')) return;
+  menu.classList.add('hidden');
+});
+document.getElementById('compareBtn')?.addEventListener('click', () => {
+  if (!activeJob || activeJob.status !== 'done') return;
+  showingOriginal = !showingOriginal;
+  const frame = document.getElementById('stage');
+  if (frame) frame.src = previewAddress(activeJob, true);
+  syncStageActions(activeJob);
+});
 
 document.getElementById('zipImages').onclick = () => {
   if (!needCapture('download')) return;
@@ -2186,8 +2939,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key !== 'Escape') return;
-  const feedback = document.getElementById('feedback');
-  if (feedback && !feedback.classList.contains('hidden')) { e.preventDefault(); closeFeedback(); return; }
   if (!pop.classList.contains('hidden')) { e.preventDefault(); closePop(); return; }
   const shell = document.getElementById('settingsShell');
   if (shell && !shell.classList.contains('hidden')) { e.preventDefault(); closeSettingsPage(); }
@@ -2198,7 +2949,29 @@ applyPrefs(readPrefs(), { rights: true });
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (readPrefs().theme === 'system') applyPrefs(readPrefs());
 });
-document.getElementById('clearHist').onclick = (e) => askClear(e.currentTarget);
+document.getElementById('clearHist')?.addEventListener('click', (e) => askClear(e.currentTarget));
+document.getElementById('micBtn')?.addEventListener('click', openDevice);
+document.getElementById('authEye')?.addEventListener('click', () => {
+  const input = document.getElementById('authPassword');
+  const eye = document.getElementById('authEye');
+  if (!input || !eye) return;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  eye.setAttribute('aria-pressed', show ? 'true' : 'false');
+  eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  eye.querySelector('.eye-open')?.toggleAttribute('hidden', show);
+  eye.querySelector('.eye-shut')?.toggleAttribute('hidden', !show);
+});
+function growInput() {
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = Math.min(180, input.scrollHeight) + 'px';
+}
+input?.addEventListener('input', growInput);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  document.title = activeJob ? `${siteSlug(activeJob)} — Protobuild` : 'Protobuild — Capture a site on your computer';
+});
 document.getElementById('themeBtn').onclick = () => document.body.classList.remove('dim');
 document.addEventListener('click', (e) => {
   if (!pop.classList.contains('hidden') && !pop.contains(e.target) && !e.target.closest('#helpBtn, #helpPill, #helpTop, #gearBtn, #meBtn, #accountSide, #accountPill, #chatMenu, #threadMenu, #micBtn, #bellBtn, #plusBtn, #clearHist, #prefClear, [data-share]')) {
@@ -2214,19 +2987,34 @@ document.querySelectorAll('[data-view="chat"], [data-view="dash"]').forEach((btn
   };
 });
 document.querySelector('[data-view="history"]').onclick = () => historyEl.querySelector('.h-item')?.focus();
+window.addEventListener('popstate', () => {
+  const id = chatIdFromLocation();
+  if (id === chatId) return;
+  applyingHistory = true;
+  const done = id ? restoreSession(id) : Promise.resolve(resetChat());
+  Promise.resolve(done).finally(() => { applyingHistory = false; });
+});
 
 async function restoreSession(forcedId) {
-  const wanted = /^[a-f0-9]{8}$/.test(forcedId || '') ? forcedId : '';
-  let saved = wanted ? readStoredSession(wanted) : readStoredSession();
+  const wanted = /^[a-f0-9]{8}$/.test(forcedId || '') ? forcedId : chatIdFromLocation();
+  const saved = wanted ? readStoredSession(wanted) : null;
   if (wanted && !saved) {
-    const latest = readStoredSession();
-    if (latest?.chatId === wanted) saved = latest;
+    activeJob = null;
+    thread = [];
+    stream.innerHTML = '';
+    chatId = wanted;
+    setWorking(true);
+    restoring = true;
+    bubble('ai', 'That chat is not on this computer. Links stay on the browser that made them.');
+    restoring = false;
+    paintChatId();
+    syncStageActions(null);
+    return;
   }
   const messages = Array.isArray(saved?.messages) ? saved.messages.filter((item) => item && item.text) : [];
-  chatId = wanted || (saved?.chatId && /^[a-f0-9]{8}$/.test(saved.chatId) ? saved.chatId : newChatId());
+  chatId = wanted || (saved?.chatId && /^[a-f0-9]{8}$/.test(saved.chatId) ? saved.chatId : '');
   paintChatId();
   if (!messages.length && !saved?.jobId) {
-    saveSession();
     syncStageActions(null);
     return;
   }
@@ -2246,7 +3034,7 @@ async function restoreSession(forcedId) {
   try {
     const job = await api('/api/jobs/' + encodeURIComponent(saved.jobId));
     activeJob = job;
-    try { localStorage.setItem('pb-chat:' + job.id, chatId); } catch {}
+    try { localStorage.setItem(chatMapKey(job.id), chatId); } catch {}
     showStage(job);
     setSendMode(jobLive(job));
     saveSession();
@@ -2267,6 +3055,7 @@ document.getElementById('pickBtn')?.addEventListener('click', () => {
   const frame = document.getElementById('stage');
   const on = !btn.classList.contains('on');
   btn.classList.toggle('on', on);
+  document.getElementById('pickHint')?.toggleAttribute('hidden', !on);
   frame?.contentWindow?.postMessage({ type: 'pb-pick', on }, '*');
 });
 document.getElementById('stage')?.addEventListener('load', () => {
@@ -2279,7 +3068,9 @@ window.addEventListener('message', (event) => {
   input.value = `Change this (${label}). `;
   input.focus();
   document.getElementById('pickBtn')?.classList.remove('on');
+  document.getElementById('pickHint')?.setAttribute('hidden', '');
   document.getElementById('stage')?.contentWindow?.postMessage({ type: 'pb-pick', on: false }, '*');
+  growInput();
 });
 document.getElementById('undoBtn')?.addEventListener('click', async () => {
   if (!activeJob?.id) { toast('No page is open.'); return; }
@@ -2293,15 +3084,142 @@ document.getElementById('undoBtn')?.addEventListener('click', async () => {
   }
 });
 
-refreshJobs().then(() => {
-  const params = new URLSearchParams(location.search);
-  const fromChat = params.get('c') || '';
-  const jobId = params.get('job');
-  if (/^[a-f0-9]{8}$/.test(fromChat)) {
-    const stored = readStoredSession(fromChat);
-    if (stored && (stored.messages?.length || stored.jobId)) return restoreSession(fromChat);
+function paintAccount() {
+  const who = readAuth();
+  const email = who?.email || '';
+  const name = document.getElementById('meName');
+  const sub = document.getElementById('meSub');
+  const line = document.getElementById('accountEmail');
+  if (name) name.textContent = email || 'Account';
+  if (sub) sub.textContent = email ? 'Signed in' : 'Not signed in';
+  if (line) line.textContent = email || 'Not signed in';
+}
+
+function startWorkspace() {
+  paintAccount();
+  return refreshJobs().then(() => {
+    const fromChat = chatIdFromLocation();
+    const jobId = new URLSearchParams(location.search).get('job');
+    if (fromChat) return restoreSession(fromChat);
+    if (jobId) {
+      addressMode = 'replace';
+      return openJob(jobId);
+    }
+    addressMode = 'replace';
+    resetChat();
+  }).catch((err) => say('ai', err.message));
+}
+
+function showAuth() {
+  const gate = document.getElementById('authGate');
+  const secure = document.getElementById('authSecure');
+  const prep = document.getElementById('prepScreen');
+  const error = document.getElementById('authError');
+  gate.hidden = false;
+  if (secure) secure.hidden = true;
+  if (prep) prep.hidden = true;
+  if (error) { error.hidden = true; error.textContent = ''; }
+}
+
+function prepareWorkspace() {
+  const panel = document.getElementById('prepScreen');
+  const steps = panel ? [...panel.querySelectorAll('[data-step]')] : [];
+  if (!panel || !steps.length) return Promise.resolve();
+  panel.hidden = false;
+  steps.forEach((step) => step.classList.remove('on', 'done'));
+  const slice = 10000 / steps.length;
+  return new Promise((resolve) => {
+    const timers = steps.map((step, index) => window.setTimeout(() => {
+      steps.forEach((item, itemIndex) => {
+        item.classList.toggle('done', itemIndex < index);
+        item.classList.toggle('on', itemIndex === index);
+      });
+    }, index * slice));
+    timers.push(window.setTimeout(() => {
+      steps.forEach((step) => {
+        step.classList.remove('on');
+        step.classList.add('done');
+      });
+      window.setTimeout(() => {
+        panel.hidden = true;
+        resolve();
+      }, 350);
+    }, 10000));
+    panel.dataset.timers = String(timers.length);
+  });
+}
+
+async function enterApp(opts = {}) {
+  const gate = document.getElementById('authGate');
+  const secure = document.getElementById('authSecure');
+  const work = startWorkspace();
+  if (opts.fromLogin) {
+    gate.hidden = false;
+    secure.hidden = false;
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    secure.hidden = true;
+    gate.hidden = true;
+    await prepareWorkspace();
   }
-  if (jobId) return openJob(jobId);
-  if (/^[a-f0-9]{8}$/.test(fromChat)) return restoreSession(fromChat);
-  return restoreSession();
-}).catch((err) => say('ai', err.message));
+  const saved = readAuth();
+  const fresh = saved?.expires_at && Number(saved.expires_at) * 1000 > Date.now() + 15000;
+  if (!fresh) {
+    const next = await refreshAuth();
+    if (!next) {
+      localStorage.removeItem('pb-auth');
+      secure.hidden = true;
+      showAuth();
+      return;
+    }
+  }
+  await work;
+  secure.hidden = true;
+  gate.hidden = true;
+  document.getElementById('prepScreen').hidden = true;
+  const agreed = await askRights();
+  if (!agreed) {
+    showAuth();
+  }
+}
+
+async function bootAuth() {
+  let config = {};
+  try { config = await fetch('/api/config').then((res) => res.json()); } catch { config = {}; }
+  if (!config.auth) {
+    document.getElementById('authGate').hidden = true;
+    await startWorkspace();
+    await askRights();
+    return;
+  }
+  if (readAuth()?.access_token) return enterApp();
+  showAuth();
+}
+
+document.getElementById('veil')?.addEventListener('click', () => {
+  if (pop && !pop.classList.contains('hidden')) closePop();
+});
+
+document.getElementById('authForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const error = document.getElementById('authError');
+  const submit = document.getElementById('authSubmit');
+  error.hidden = true;
+  setBusy(submit, true);
+  try {
+    const data = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    saveAuth(data);
+    await enterApp({ fromLogin: true });
+  } catch (err) {
+    error.textContent = err.message || 'Sign-in did not go through.';
+    error.hidden = false;
+  } finally {
+    setBusy(submit, false);
+  }
+});
+
+bootAuth();

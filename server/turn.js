@@ -2,11 +2,20 @@ const { completeChat } = require('./llm');
 const { validateCss, cssFromInstruction } = require('./css-safe');
 const { explicitTargets } = require('./agent');
 const { applyPrototype } = require('./prototype');
+const { swapPart } = require('./borrow');
 const { applyModelPlan } = require('./model-edit');
 const env = require('./env');
 
 function hostOf(url) {
   try { return new URL(url).host.replace(/^www\./, ''); } catch { return url || 'that page'; }
+}
+
+function borrowRequest(text) {
+  const from = text.match(/\b(header|footer|nav)\b[\s\S]{0,50}\b(?:from|of)\s+(?:the\s+)?([a-z0-9][a-z0-9.-]{1,80})/i);
+  if (from) return { part: from[1].toLowerCase(), name: from[2].toLowerCase().replace(/[.?]$/, '') };
+  const lead = text.match(/\b(?:use|take|bring|swap)\b[\s\S]{0,40}\b([a-z0-9][a-z0-9.-]{1,80})\b[\s\S]{0,24}\b(header|footer|nav)\b/i);
+  if (lead) return { part: lead[2].toLowerCase(), name: lead[1].toLowerCase().replace(/[.?]$/, '') };
+  return null;
 }
 
 function parseModelJson(text) {
@@ -68,7 +77,7 @@ function priorMessages(history) {
 
 function userContent(message, images) {
   const text = String(message || '').trim() || 'Use the attached image as a reference.';
-  const pics = (Array.isArray(images) ? images : []).slice(0, 3).filter((url) => /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(String(url)) && String(url).length < 2000000);
+  const pics = (Array.isArray(images) ? images : []).slice(0, 2).filter((url) => /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(String(url)) && String(url).length < 2000000);
   if (!pics.length) return text;
   return [{ type: 'text', text }, ...pics.map((url) => ({ type: 'image_url', image_url: { url } }))];
 }
@@ -123,12 +132,36 @@ async function runTurn({ message, purpose, history, images, activeJob, onEvent, 
   }
 
   if (/\b(host|publish)\b/i.test(text)) {
-    const reply = 'A separate site is not connected. Use Share for a link. That link can open on a phone.';
+    if (!deps.share) {
+      const reply = 'Use Share for a link. That link can open on a phone.';
+      onEvent?.({ type: 'token', text: reply });
+      return { reply, job: activeJob };
+    }
+    const shared = await deps.share(activeJob);
+    const link = shared?.shareUrl || '';
+    const reply = link ? `Live link: ${link}` : 'I could not turn the link on.';
     onEvent?.({ type: 'token', text: reply });
-    return { reply, job: activeJob };
+    return { reply, job: shared || activeJob, shareUrl: link };
   }
 
   const page = deps.readHtml ? deps.readHtml(activeJob) : '';
+  const borrowed = borrowRequest(text);
+  if (borrowed && deps.findCapture) {
+    const donor = await deps.findCapture(borrowed.name, activeJob);
+    const label = borrowed.part;
+    if (!donor) {
+      const reply = `There is no finished copy of ${borrowed.name} to take that ${label} from. Scan that site first.`;
+      onEvent?.({ type: 'token', text: reply });
+      return { reply, job: activeJob, editFailed: true };
+    }
+    const next = swapPart(page, donor.html, label, `/preview/${donor.id}/`);
+    const reply = next
+      ? `The ${label} now comes from ${donor.host}.`
+      : `That copy of ${donor.host} does not have a ${label} to use.`;
+    if (next && deps.writeHtml) await deps.writeHtml(activeJob, next);
+    onEvent?.({ type: 'token', text: reply });
+    return { reply, job: activeJob, edited: !!next, editFailed: !next };
+  }
   const prototype = applyPrototype(page, text, { logoSrc: deps.logoSrc ? deps.logoSrc(activeJob) : '' });
   if (prototype) {
     if (prototype.error) {

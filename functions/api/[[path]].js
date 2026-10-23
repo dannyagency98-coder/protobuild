@@ -1,4 +1,5 @@
 import { cancelCaptureRun, currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob } from '../lib/edge.js';
+import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
@@ -6,10 +7,7 @@ import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/a
 const PAGES_USER_ID = '6f0c1a2e-7b34-4d15-8a10-000000000001';
 
 async function actor(request, env) {
-  if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
-    const signedIn = await currentUser(request, env);
-    if (signedIn) return signedIn;
-  }
+  if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) return currentUser(request, env);
   return { id: String(env.PAGES_USER_ID || PAGES_USER_ID), email: 'pages' };
 }
 
@@ -18,8 +16,44 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  if (request.method === 'GET' && path.endsWith('/config')) {
+    return json({
+      hosted: true,
+      auth: !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY),
+      maxPromptsPerDay: Number(env.MAX_PROMPTS_PER_DAY) || 1500,
+      previewTTLDays: 30,
+    });
+  }
+  if (request.method === 'POST' && /\/auth\/(login|signup|refresh)$/.test(path)) {
+    const body = await request.json().catch(() => ({}));
+    const email = String(body.email || '').trim().toLowerCase();
+    if (path.endsWith('/signup')) return json({ error: 'Accounts are not open for signup.' }, 403);
+    const kind = path.endsWith('/refresh') ? 'refresh' : 'login';
+    if (kind !== 'refresh' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'Enter a valid email address.' }, 400);
+    if (kind !== 'refresh' && String(body.password || '').length < 6) return json({ error: 'Use a password of at least 6 characters.' }, 400);
+    const result = await passwordAuth(env, kind, email, kind === 'refresh' ? String(body.refresh_token || '') : String(body.password || ''));
+    if (result.error) return json({ error: result.error }, result.status || 400);
+    return json(result.session || { confirm: true, email: result.email });
+  }
+
   const user = await actor(request, env);
-  if (!user) return json({ error: 'This deploy has no capture account yet.' }, 503);
+  if (!user) return json({ error: 'Sign in to continue.' }, 401);
+
+  if (request.method === 'POST' && path.endsWith('/auth/password')) {
+    const body = await request.json().catch(() => ({}));
+    const next = String(body.password || '');
+    const confirm = String(body.confirm || '');
+    if (!user.email || user.email === 'pages') return json({ error: 'Sign in to continue.' }, 401);
+    if (next.length < 6) return json({ error: 'Use a password of at least 6 characters.' }, 400);
+    if (next !== confirm) return json({ error: 'Those new passwords do not match.' }, 400);
+    const checked = await passwordAuth(env, 'login', user.email, String(body.current || ''));
+    if (checked.error) return json({ error: 'That current password is wrong.' }, 401);
+    const saved = await updatePassword(env, checked.session.access_token, next);
+    if (saved.error) return json({ error: saved.error }, saved.status || 400);
+    const fresh = await passwordAuth(env, 'login', user.email, next);
+    if (fresh.error) return json({ error: fresh.error }, fresh.status || 400);
+    return json(fresh.session);
+  }
 
   if (request.method === 'POST' && path.endsWith('/jobs') && !/\/jobs\/[^/]+/.test(path)) {
     const body = await request.json().catch(() => ({}));
@@ -73,14 +107,6 @@ export async function onRequest(context) {
       if (job && job.user_id === user.id) jobs.push(publicJob(env, job));
     }
     return json({ jobs });
-  }
-
-  if (request.method === 'GET' && path.endsWith('/config')) {
-    return json({
-      hosted: true,
-      maxPromptsPerDay: Number(env.MAX_PROMPTS_PER_DAY) || 1500,
-      previewTTLDays: 30,
-    });
   }
 
   if (request.method === 'POST' && path.endsWith('/upload')) {

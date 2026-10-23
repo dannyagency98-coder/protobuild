@@ -19,5 +19,8 @@ export async function onRequest(context) {
   if (file.split('/').some((part) => part === '.' || part === '..')) {
     return new Response('Not found', { status: 404 });
   }
-  return serveStored(env, meta.jobId, file, { share: true });
+  const pageUrl = new URL(request.url);
+  pageUrl.search = '';
+  pageUrl.hash = '';
+  return serveStored(env, meta.jobId, file, { share: true, pageUrl: pageUrl.href });
 }

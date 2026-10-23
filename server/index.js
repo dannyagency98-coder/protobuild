@@ -7,6 +7,8 @@ const env = require('./env');
 const jobs = require('./jobs');
 const { assertPublicHttpUrl } = require('./url-safety');
 const { parseCapturePrompt } = require('./prompt-parse');
+const { readJobHtml } = require('./borrow');
+const auth = require('./auth');
 const { validateCss, cssFromInstruction } = require('./css-safe');
 const { runTurn } = require('./turn');
 
@@ -292,8 +294,46 @@ function readBody(req, limit = 12 * 1024 * 1024) {
   });
 }
 
-function currentUser() {
-  return { id: 'local-user', email: 'local' };
+async function currentUser(req) {
+  if (!auth.authOn()) return { id: 'local-user', email: 'local' };
+  const header = req.headers.authorization || '';
+  const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+  return auth.userFromToken(token);
+}
+
+async function handlePassword(req, res) {
+  if (!auth.authOn()) return sendJson(res, 503, { error: 'Sign-in is not configured.' });
+  const user = await currentUser(req);
+  if (!user?.email || user.email === 'local') return sendJson(res, 401, { error: 'Sign in to continue.' });
+  const body = JSON.parse((await readBody(req, 20000)).toString('utf8') || '{}');
+  const next = String(body.password || '');
+  const confirm = String(body.confirm || '');
+  if (next.length < 6) return sendJson(res, 400, { error: 'Use a password of at least 6 characters.' });
+  if (next !== confirm) return sendJson(res, 400, { error: 'Those new passwords do not match.' });
+  try {
+    return sendJson(res, 200, await auth.changePassword(user.email, String(body.current || ''), next));
+  } catch (err) {
+    const message = /wrong|invalid|credentials/i.test(err.message || '') ? 'That current password is wrong.' : (err.message || 'That password was not saved.');
+    return sendJson(res, err.status || 400, { error: message });
+  }
+}
+
+async function handleAuth(req, res, url) {
+  if (!auth.authOn()) return sendJson(res, 503, { error: 'Sign-in is not configured.' });
+  const body = JSON.parse((await readBody(req, 20000)).toString('utf8') || '{}');
+  const email = auth.cleanEmail(body.email);
+  const password = String(body.password || '');
+  try {
+    if (url.pathname === '/api/auth/refresh') {
+      return sendJson(res, 200, await auth.refresh(String(body.refresh_token || '')));
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'Enter a valid email address.' });
+    if (password.length < 6) return sendJson(res, 400, { error: 'Use a password of at least 6 characters.' });
+    if (url.pathname === '/api/auth/signup') return sendJson(res, 403, { error: 'Accounts are not open for signup.' });
+    return sendJson(res, 200, await auth.signIn(email, password));
+  } catch (err) {
+    return sendJson(res, err.status || 400, { error: err.message || 'Sign-in did not go through.' });
+  }
 }
 
 function siteDir(jobId) {
@@ -322,24 +362,66 @@ async function markStopped(id) {
   });
 }
 
+async function enableShare(job, days = 7) {
+  const token = job.share_token || crypto.randomBytes(12).toString('hex');
+  const span = Number(days) === 0 ? 0 : Number(days) === 30 ? 30 : 7;
+  const expires = span ? new Date(Date.now() + span * 86400000).toISOString() : null;
+  const map = jobs.shares();
+  map[token] = { jobId: job.id, expiresAt: expires };
+  jobs.saveShares(map);
+  const updated = await jobs.updateJob(job.id, { share_token: token, share_expires_at: expires });
+  return updated || { ...job, share_token: token, share_expires_at: expires };
+}
+
 function eraseJobFiles(job) {
   const id = typeof job === 'string' ? job : job?.id;
   if (!safeJobId(id)) return;
   stopCapture(id);
-  fs.rmSync(siteDir(id), { recursive: true, force: true });
-  for (const name of [`${id}.zip`, `${id}-images.zip`]) {
-    fs.rmSync(path.join(zipDir, name), { force: true });
-  }
-  for (const ext of ['.html', '.htm', '.zip']) {
-    fs.rmSync(path.join(uploadDir, `${id}${ext}`), { force: true });
-  }
+  const targets = [
+    siteDir(id),
+    path.join(zipDir, `${id}.zip`),
+    path.join(zipDir, `${id}-images.zip`),
+    path.join(uploadDir, `${id}.html`),
+    path.join(uploadDir, `${id}.htm`),
+    path.join(uploadDir, `${id}.zip`),
+  ];
   const uploadPath = job?.options?.uploadPath;
-  if (uploadPath && path.resolve(uploadPath).startsWith(path.resolve(uploadDir) + path.sep)) {
-    fs.rmSync(uploadPath, { force: true });
-  }
+  if (uploadPath && path.resolve(uploadPath).startsWith(path.resolve(uploadDir) + path.sep)) targets.push(uploadPath);
+  for (const target of targets) fs.promises.rm(target, { recursive: true, force: true }).catch(() => {});
 }
 
-function injectHtml(html, { share = false, hasCustom = false, root = '' } = {}) {
+function previewText(value) {
+  return String(value || '').replace(/\s+/g, ' ').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').trim().slice(0, 300);
+}
+
+function withSharePreview(html, { pageUrl, imageUrl }) {
+  const title = previewText((/<title[^>]*>([^<]*)<\/title>/i.exec(html) || [])[1] || 'Shared page');
+  const described = (/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i.exec(html) || [])[1]
+    || (/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["']/i.exec(html) || [])[1]
+    || '';
+  const description = previewText(described || title);
+  let next = html.replace(/<meta\b[^>]*(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image)["'][^>]*>/gi, (tag) => {
+    return tag.replace(/content=(["'])(.*?)\1/i, (full, quote, url) => {
+      try {
+        if (/^https?:\/\//i.test(url)) return full;
+        return `content=${quote}${previewText(new URL(url, pageUrl).href)}${quote}`;
+      } catch { return full; }
+    });
+  });
+  const bits = [];
+  if (!/property=["']og:title["']/i.test(next)) bits.push(`<meta property="og:title" content="${title}">`);
+  if (!/property=["']og:description["']/i.test(next)) bits.push(`<meta property="og:description" content="${description}">`);
+  if (!/property=["']og:url["']/i.test(next)) bits.push(`<meta property="og:url" content="${previewText(pageUrl)}">`);
+  if (!/property=["']og:image["']/i.test(next) && imageUrl) bits.push(`<meta property="og:image" content="${previewText(imageUrl)}">`);
+  if (/name=["']twitter:card["']/i.test(next)) {
+    next = next.replace(/<meta\b[^>]*name=["']twitter:card["'][^>]*>/i, '<meta name="twitter:card" content="summary_large_image">');
+  } else bits.push('<meta name="twitter:card" content="summary_large_image">');
+  if (!bits.length) return next;
+  const block = bits.join('');
+  return /<head[^>]*>/i.test(next) ? next.replace(/<head[^>]*>/i, (open) => `${open}${block}`) : `<head>${block}</head>${next}`;
+}
+
+function injectHtml(html, { share = false, hasCustom = false, root = '', pageUrl = '', imageUrl = '' } = {}) {
   if (root) html = localizeHtml(html, root);
   html = html.replace(/<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/gi, '');
   html = html.replace(/<script\b(?![^>]*\bdata-proto-)[\s\S]*?<\/script>/gi, '');
@@ -353,29 +435,52 @@ function injectHtml(html, { share = false, hasCustom = false, root = '' } = {}) 
   if (share && !html.includes('Reference prototype')) {
     html = html.replace(/<body([^>]*)>/i, '<body$1><div style="position:fixed;top:0;left:0;right:0;background:#111;color:#f3efe4;padding:6px 10px;font:12px/1.4 ui-sans-serif,system-ui;z-index:99999;text-align:center">Reference prototype, not the original website</div>');
   }
+  if (share && pageUrl) html = withSharePreview(html, { pageUrl, imageUrl });
   if (!html.includes('data-proto-fix')) {
-    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${FIX_SCRIPT}</body>`) : html + FIX_SCRIPT;
+    const end = html.toLowerCase().lastIndexOf('</body>');
+    html = end >= 0 ? html.slice(0, end) + FIX_SCRIPT + html.slice(end) : html + FIX_SCRIPT;
   }
   return html;
 }
 
-function serveSite(req, res, jobId, urlPath, { share = false } = {}) {
+function rolledBackHtml(jobId, html) {
+  const rows = readEdits(jobId);
+  for (const last of [...rows].reverse()) {
+    if (last.type === 'snapshot' && typeof last.before === 'string') html = last.before;
+    else if (last.type === 'html' && last.replace && html.includes(last.replace)) html = html.replace(last.replace, last.find);
+  }
+  return html.replace(/<link[^>]*href=["']custom\.css["'][^>]*>/gi, '');
+}
+
+function serveSite(req, res, jobId, urlPath, { share = false, original = false } = {}) {
   const root = siteDir(jobId);
   let rel = decodeURIComponent(urlPath || '/');
   if (rel === '/' || rel === '') rel = '/index.html';
   const filePath = path.normalize(path.join(root, rel));
+  const pageUrl = share ? new URL(req.url, `http://${req.headers.host}`).href.split('?')[0] : '';
+  const shot = path.join(root, 'screenshots', 'desktop.png');
+  let imageUrl = '';
+  if (share && pageUrl && fs.existsSync(shot)) {
+    const shareUrl = new URL(pageUrl);
+    const token = shareUrl.pathname.split('/').filter(Boolean)[1] || '';
+    if (token) imageUrl = `${shareUrl.origin}/share/${token}/screenshots/desktop.png`;
+  }
   if (!filePath.startsWith(root)) return send(res, 403, 'Forbidden');
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     const idx = path.join(filePath, 'index.html');
-    if (fs.existsSync(idx)) return serveFile(res, idx, { htmlRewriter: true, share, hasCustom: fs.existsSync(path.join(root, 'custom.css')), root });
+    if (fs.existsSync(idx)) return serveFile(res, idx, { htmlRewriter: true, share, hasCustom: !original && fs.existsSync(path.join(root, 'custom.css')), root, original, jobId, pageUrl, imageUrl });
     return send(res, 404, 'Not found');
   }
   const ext = path.extname(filePath).toLowerCase();
   return serveFile(res, filePath, {
     htmlRewriter: ext === '.html',
     share,
-    hasCustom: fs.existsSync(path.join(root, 'custom.css')),
+    hasCustom: !original && fs.existsSync(path.join(root, 'custom.css')),
     root,
+    original,
+    jobId,
+    pageUrl,
+    imageUrl,
   });
 }
 
@@ -393,6 +498,7 @@ function sniffType(filePath) {
     if (buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return 'image/webp';
     const brand = buf.slice(4, 16).toString('ascii');
     if (brand.includes('ftyp') && /avif|avis/.test(buf.slice(8, 28).toString('ascii'))) return 'image/avif';
+    if (buf[0] === 0x00 && buf[1] === 0x00 && (buf[2] === 0x01 || buf[2] === 0x02) && buf[3] === 0x00) return 'image/x-icon';
     const start = buf.toString('utf8').trimStart();
     if (start.startsWith('<svg') || (start.startsWith('<?xml') && start.includes('<svg'))) return 'image/svg+xml';
   } catch {
@@ -422,24 +528,28 @@ function viewableImage(filePath, declared, local) {
   if (sniffed === 'image/jxl') return null;
   const type = sniffed || declaredType;
   if (VIEWABLE_IMAGE.has(type)) return type;
+  if (/\.svg$/i.test(local || '')) return 'image/svg+xml';
+  if (/\.ico$/i.test(local || '')) return 'image/x-icon';
   if (/\.(png|jpe?g|gif|webp|svg|ico|avif|bmp)$/i.test(local) && type.startsWith('image/') && type !== 'image/jxl') return type;
   return null;
 }
 
-function serveFile(res, filePath, { htmlRewriter = false, share = false, hasCustom = false, root = '' } = {}) {
+function serveFile(res, filePath, { htmlRewriter = false, share = false, hasCustom = false, root = '', original = false, jobId = '', pageUrl = '', imageUrl = '' } = {}) {
   const ext = path.extname(filePath).toLowerCase();
   const sniffed = sniffType(filePath);
   const headers = {
     'Content-Type': (sniffed && sniffed.startsWith('image/')) ? sniffed : (MIME[ext] || 'application/octet-stream'),
     'X-Robots-Tag': 'noindex, nofollow',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self' data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'",
+    'Content-Security-Policy': "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'",
     'Cache-Control': 'no-store',
   };
   if (htmlRewriter) {
     let html = fs.readFileSync(filePath, 'utf8');
-    html = injectHtml(html, { share, hasCustom, root });
-    return send(res, 200, html, { ...headers, 'Content-Type': 'text/html; charset=utf-8' });
+    if (original && jobId) html = rolledBackHtml(jobId, html);
+    html = injectHtml(html, { share, hasCustom, root, pageUrl, imageUrl });
+    if (share) delete headers['X-Robots-Tag'];
+    return send(res, 200, html, { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': share ? 'public, max-age=3600' : headers['Cache-Control'] });
   }
   if (ext === '.css' && root) {
     const css = localizeCss(fs.readFileSync(filePath, 'utf8'), root);
@@ -496,7 +606,7 @@ function buildZip(jobId, type) {
 }
 
 function serveStatic(req, res, url) {
-  let rel = url.pathname === '/' ? '/index.html' : url.pathname;
+  let rel = url.pathname === '/' || /^\/c\/[a-f0-9]{8}\/?$/.test(url.pathname) ? '/index.html' : url.pathname;
   const filePath = path.normalize(path.join(appDir, rel));
   if (!filePath.startsWith(appDir)) return send(res, 403, 'Forbidden');
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return send(res, 404, 'Not found');
@@ -626,11 +736,18 @@ async function createCapture(user, { url: rawUrl, mode, prompt, rights, capture 
 
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
-    return sendJson(res, 200, { limits: env.limits });
+    return sendJson(res, 200, { limits: env.limits, auth: auth.authOn() });
+  }
+  if (req.method === 'POST' && /^\/api\/auth\/(login|signup|refresh)$/.test(url.pathname)) {
+    return handleAuth(req, res, url);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/auth/password') {
+    return handlePassword(req, res);
   }
 
   const parts = url.pathname.split('/').filter(Boolean);
-  const user = currentUser();
+  const user = await currentUser(req);
+  if (!user) return sendJson(res, 401, { error: 'Sign in to continue.' });
 
   if (req.method === 'POST' && url.pathname === '/api/jobs') {
     const body = JSON.parse((await readBody(req, 200000)).toString('utf8') || '{}');
@@ -694,6 +811,20 @@ async function handleApi(req, res, url) {
             if (!fs.existsSync(htmlPath)) return '';
             return fs.readFileSync(htmlPath, 'utf8');
           },
+          findCapture: async (name) => {
+            const needle = String(name || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+            if (!needle) return null;
+            const list = await jobs.listJobs(user.id);
+            const hit = list.find((job) => {
+              const host = String(job.source_url || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '');
+              if (!(host.startsWith(needle) || host.includes(needle))) return false;
+              if (job.status === 'running' || job.status === 'queued') return false;
+              if (job.status === 'done') return true;
+              return fs.existsSync(path.join(siteDir(job.id), 'index.html'));
+            });
+            if (!hit) return null;
+            return { id: hit.id, host: String(hit.source_url || needle).replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0], html: readJobHtml(siteDir(hit.id)) };
+          },
           writeHtml: async (job, html) => {
             const htmlPath = path.join(siteDir(job.id), 'index.html');
             const before = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
@@ -702,6 +833,7 @@ async function handleApi(req, res, url) {
             rows.push({ type: 'snapshot', before });
             writeEdits(job.id, rows.slice(-8));
           },
+          share: (job) => enableShare(job, 7).then((shared) => jobs.publicJob(shared, origin)),
           logoSrc: (job) => {
             const assets = path.join(siteDir(job.id), 'assets');
             if (!fs.existsSync(assets)) return '';
@@ -765,7 +897,8 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'POST' && parts[3] === 'host') {
-      return sendJson(res, 501, { error: 'Use the share link. Publishing a capture as its own site is not connected.' });
+      const shared = await enableShare(job, 7);
+      return sendJson(res, 200, jobs.publicJob(shared, originOf(req)));
     }
 
     if (req.method === 'POST' && parts[3] === 'stop') {
@@ -857,15 +990,9 @@ async function handleApi(req, res, url) {
         const updated = await jobs.updateJob(id, { share_token: null, share_expires_at: null });
         return sendJson(res, 200, jobs.publicJob(updated || { ...job, share_token: null }, originOf(req)));
       }
-      const token = job.share_token || crypto.randomBytes(12).toString('hex');
       const days = Number(body.expiresInDays);
-      const span = days === 0 ? 0 : days === 30 ? 30 : 7;
-      const expires = span ? new Date(Date.now() + span * 86400000).toISOString() : null;
-      const map = jobs.shares();
-      map[token] = { jobId: id, expiresAt: expires };
-      jobs.saveShares(map);
-      const updated = await jobs.updateJob(id, { share_token: token, share_expires_at: expires });
-      return sendJson(res, 200, jobs.publicJob(updated || { ...job, share_token: token, share_expires_at: expires }, originOf(req)));
+      const shared = await enableShare(job, days === 0 ? 0 : days === 30 ? 30 : 7);
+      return sendJson(res, 200, jobs.publicJob(shared, originOf(req)));
     }
 
     if (req.method === 'POST' && parts[3] === 'apply') {
@@ -969,7 +1096,7 @@ const server = http.createServer(async (req, res) => {
       const segs = url.pathname.split('/').filter(Boolean);
       const jobId = segs[1];
       const rest = '/' + segs.slice(2).join('/');
-      return serveSite(req, res, jobId, rest);
+      return serveSite(req, res, jobId, rest, { original: url.searchParams.get('original') === '1' });
     }
     if (url.pathname.startsWith('/share/')) {
       const segs = url.pathname.split('/').filter(Boolean);

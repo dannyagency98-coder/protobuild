@@ -7,6 +7,7 @@ function parseCapturePrompt(text, fallbackMode = 'clone') {
     actions: [],
     imageScope: 'all',
     crawl: false,
+    productShots: false,
   };
   const raw = String(text || '').trim();
   if (!raw) return result;
@@ -27,7 +28,9 @@ function parseCapturePrompt(text, fallbackMode = 'clone') {
     if (!m[2] || /^s/.test(m[2])) ms = m[2] && m[2].startsWith('ms') ? ms : ms * 1000;
     result.actions.push({ type: 'wait', ms: Math.min(ms, 8000) });
   }
-  if (/\bcrawl\b|\balso copy\b|\bproduct page\b|\bcollection page\b/.test(lower)) result.crawl = true;
+  if (/\b(first two|two images|product images|each product|every product|all products|product pages?)\b/.test(lower) && /\b(images?|photos?|pictures?|gallery)\b/.test(lower)) {
+    result.productShots = true;
+  } else if (/\bcrawl\b|\balso copy\b|\bcollection page\b/.test(lower)) result.crawl = true;
   if (/\bscroll\b/.test(lower)) {
     result.actions.push({ type: 'scroll', to: /footer/.test(lower) ? 'footer' : 'bottom' });
   }

@@ -96,10 +96,45 @@ const FIX_SCRIPT = `<script data-proto-fix="1">(function(){
       if(fb) el.setAttribute('src', fb);
     }
   }
+  document.querySelectorAll('[role="dialog"], .c-popin--opened').forEach(function(el){
+    if(/select your location/i.test(el.textContent||'')) el.remove();
+  });
+  document.body.style.overflow = 'auto';
+  document.body.style.height = 'auto';
+  document.documentElement.style.overflowX = 'hidden';
+  function fitWidth(){
+    var root = document.documentElement;
+    root.style.zoom = '';
+    var wide = Math.max(root.scrollWidth || 0, document.body ? document.body.scrollWidth : 0);
+    var view = window.innerWidth || 0;
+    if (view > 0 && wide > view + 12) root.style.zoom = String(view / wide);
+  }
+  fitWidth();
+  window.addEventListener('load', fitWidth);
+  document.querySelectorAll('video').forEach(function(video){
+    var box = video.getBoundingClientRect();
+    if (box.width < 120 || box.height < 80) return;
+    var still = document.createElement('img');
+    still.src = 'screenshots/desktop.png';
+    still.alt = '';
+    still.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center;display:block;background:#111';
+    still.addEventListener('error', function(){ still.remove(); }, {once:true});
+    video.replaceWith(still);
+  });
   document.querySelectorAll('img,source').forEach(clean);
   document.querySelectorAll('img').forEach(function(img){
+    var src=img.getAttribute('src')||'';
+    var data=img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||'';
+    if(data && !/^(https?:)?\\/\\//i.test(data) && (!src || /^https?:/i.test(src))) img.setAttribute('src', data);
+  });
+  document.querySelectorAll('img').forEach(function(img){
+    var src=img.getAttribute('src')||'';
+    if(!src){ img.style.display='none'; return; }
     img.addEventListener('error', function(){
       img.removeAttribute('srcset');
+      var name=(img.getAttribute('alt')||'')+' '+(img.getAttribute('class')||'')+' '+src;
+      var w=parseInt(img.getAttribute('width')||'0',10);
+      if(/icon|logo|sprite|\.svg|\.ico/i.test(name) || (w>0 && w<=96)) img.style.display='none';
     }, {once:true});
   });
 })();</script>`;

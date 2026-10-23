@@ -39,7 +39,7 @@ module.exports = {
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   ollamaModel: process.env.OLLAMA_MODEL || 'qwen2.5-coder:1.5b',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
   r2: {
     accountId: process.env.R2_ACCOUNT_ID || '',
     accessKeyId: process.env.R2_ACCESS_KEY_ID || '',

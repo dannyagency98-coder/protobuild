@@ -161,8 +161,10 @@ async function readSse(res, model, onToken) {
 }
 
 function geminiModels() {
-  const preferred = String(env.geminiModel || 'gemini-3.8-flash').trim() || 'gemini-3.8-flash';
-  return [...new Set([preferred, 'gemini-3.5-flash', 'gemini-3-flash-preview'])];
+  const preferred = String(env.geminiModel || '').trim();
+  const fast = ['gemini-3.5-flash', 'gemini-3-flash-preview'];
+  const lead = preferred && !/3\.8/.test(preferred) ? [preferred] : [];
+  return [...new Set([...lead, ...fast])];
 }
 
 async function gemini(messages, { tools, maxTokens }) {
@@ -175,7 +177,7 @@ async function gemini(messages, { tools, maxTokens }) {
       messages,
       temperature: 0.4,
       max_tokens: Math.max(maxTokens || 4096, 128),
-      reasoning_effort: 'low',
+      reasoning_effort: 'none',
     };
     if (tools?.length) body.tools = tools;
     let res;
@@ -187,7 +189,7 @@ async function gemini(messages, { tools, maxTokens }) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(8000),
       });
     } catch (err) {
       attempts += 1;
@@ -373,12 +375,17 @@ async function completeChat(messages, options = {}) {
         if (local.error) onMeta({ model: local.model, quotaReset: err.until, note: local.note });
         return local;
       }
-      return {
-        text: '',
-        toolCalls: [],
-        model: env.geminiModel,
-        error: err.detail ? `${err.message}. ${err.detail}` : (err.message || 'Gemini did not answer.'),
-      };
+      if (!allowLocal) {
+        return {
+          text: '',
+          toolCalls: [],
+          model: env.geminiModel,
+          error: err.detail ? `${err.message}. ${err.detail}` : (err.message || 'Gemini did not answer.'),
+        };
+      }
+      const local = await localModel(messages, { ...options, prefer: FALLBACK_MODEL, note: 'Gemini did not answer, so the local model did.' });
+      if (!local.text && local.error) local.error = `Gemini did not answer. ${local.error}`;
+      return local;
     }
   }
   if (held) {

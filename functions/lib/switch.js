@@ -116,8 +116,10 @@ async function ollama(env, messages, maxTokens) {
 }
 
 function geminiModels(env) {
-  const preferred = String(env.GEMINI_MODEL || 'gemini-3.8-flash').trim() || 'gemini-3.8-flash';
-  return [...new Set([preferred, 'gemini-3.5-flash', 'gemini-3-flash-preview'])];
+  const preferred = String(env.GEMINI_MODEL || '').trim();
+  const fast = ['gemini-3.5-flash', 'gemini-3-flash-preview'];
+  const lead = preferred && !/3\.8/.test(preferred) ? [preferred] : [];
+  return [...new Set([...lead, ...fast])];
 }
 
 async function gemini(env, messages, maxTokens) {
@@ -133,13 +135,13 @@ async function gemini(env, messages, maxTokens) {
           Authorization: `Bearer ${env.GEMINI_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({
           model,
           messages,
           temperature: 0.2,
           max_tokens: Math.max(Number(maxTokens) || 200, 128),
-          reasoning_effort: 'low',
+          reasoning_effort: 'none',
         }),
       });
     } catch (err) {

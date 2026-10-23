@@ -258,6 +258,24 @@ function shareIsLive(job) {
   return Number.isFinite(at) && at > Date.now();
 }
 
+function undoLabel(job) {
+  if (!job?.id) return '';
+  try {
+    const rows = JSON.parse(fs.readFileSync(path.join(env.root, 'out', job.id, 'edits.json'), 'utf8'));
+    const last = Array.isArray(rows) ? rows[rows.length - 1] : null;
+    if (!last) return '';
+    if (last.type === 'css') return 'the last style change';
+    if (last.type === 'html') {
+      const bit = String(last.replace || last.find || '').replace(/\s+/g, ' ').trim().slice(0, 42);
+      return bit ? `“${bit}”` : 'the last text change';
+    }
+    if (last.type === 'snapshot') return 'the last page change';
+    return 'the last change';
+  } catch {
+    return '';
+  }
+}
+
 function canUndo(job) {
   if (!job?.id) return false;
   try {
@@ -290,6 +308,7 @@ function publicJob(job, origin) {
     shareUrl: shareIsLive(job) ? `${origin}/share/${job.share_token}/` : null,
     hostedUrl: job.options?.hostedUrl || '',
     canUndo: canUndo(job),
+    undoLabel: undoLabel(job),
   };
 }
 

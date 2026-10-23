@@ -247,16 +247,35 @@ function postProcessHtml(html) {
   return html;
 }
 
+function fitMedium(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return;
+  try {
+    if (fs.statSync(filePath).size < 220 * 1024) return;
+    execFileSync('sips', ['-Z', '1200', filePath], { stdio: 'ignore' });
+  } catch { /* leave the original when this machine cannot resize it */ }
+}
+
 function pickSrcset(srcset) {
   if (!srcset) return '';
-  let best = '', bestW = 0;
+  const target = 1000;
+  let best = '';
+  let bestGap = Infinity;
+  let fallback = '';
   for (const part of srcset.split(',')) {
     const bits = part.trim().split(/\s+/);
     const url = bits[0];
+    if (!url) continue;
     const w = parseInt((bits[1] || '0').replace(/\D/g, ''), 10) || 0;
-    if (w >= bestW) { bestW = w; best = url; }
+    if (!fallback) fallback = url;
+    if (!w) continue;
+    const gap = Math.abs(w - target);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = url;
+    }
   }
-  return best || srcset.split(',')[0].trim().split(/\s+/)[0];
+  return best || fallback || srcset.split(',')[0].trim().split(/\s+/)[0];
 }
 
 function readUploadedHtml(src) {
@@ -329,6 +348,92 @@ async function copyLinkedPages(page, sourceUrl) {
   if (saved.length) {
     try { await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }); } catch { /* stay on the last page */ }
   }
+  return saved;
+}
+
+async function dismissLocation(page) {
+  const closed = await page.evaluate(() => {
+    const dialogs = [...document.querySelectorAll('[role="dialog"], .c-popin--opened')];
+    const dialog = dialogs.find((el) => /select your location/i.test(el.textContent || ''));
+    if (!dialog) return false;
+    dialog.remove();
+    document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
+    return true;
+  }).catch(() => false);
+  if (closed) await page.waitForTimeout(250);
+}
+
+async function collectProductShots(page, context, sourceUrl, knownUrls) {
+  await dismissLocation(page);
+  const known = new Set(knownUrls || []);
+  const links = await page.evaluate(() => {
+    const host = location.host;
+    const hrefs = [];
+    for (const a of document.querySelectorAll('a[href]')) {
+      try {
+        const next = new URL(a.href, location.href);
+        if (next.host !== host) continue;
+        const path = next.pathname.toLowerCase();
+        if (!/\/(products?|p|t|shop|item)\//.test(path) && !/-[a-z0-9]*\d[a-z0-9]{4,}\.html$/i.test(path)) continue;
+        hrefs.push(next.href.split('?')[0].split('#')[0]);
+      } catch { /* skip */ }
+    }
+    return [...new Set(hrefs)].slice(0, 4);
+  }).catch(() => []);
+  const saved = [];
+  const seenHash = new Set();
+  for (const href of links) {
+    try {
+      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      await page.waitForTimeout(200);
+      await dismissLocation(page);
+      const srcs = await page.evaluate((knownList) => {
+        const seen = new Set(knownList);
+        const root = document.querySelector('main') || document.body;
+        const out = [];
+        for (const img of root.querySelectorAll('img')) {
+          if (img.closest('header, nav, footer')) continue;
+          const src = img.currentSrc || img.getAttribute('src') || img.getAttribute('data-src') || '';
+          if (!src || src.startsWith('data:') || /\.svg($|\?)/i.test(src)) continue;
+          let abs = src;
+          try { abs = new URL(src, location.href).href; } catch { continue; }
+          if (seen.has(abs)) continue;
+          const wide = img.naturalWidth || img.width || 0;
+          if (wide && wide < 240) continue;
+          out.push(abs);
+          if (out.length === 2) break;
+        }
+        return out;
+      }, [...known]);
+      for (const src of srcs) {
+        const abs = new URL(src, href).href;
+        const res = await context.request.get(abs, { timeout: 2500 });
+        if (!res.ok()) continue;
+        const buf = Buffer.from(await res.body());
+        if (buf.length < 800 || buf.length > 8 * 1024 * 1024) continue;
+        const digest = hashShort(buf);
+        if (seenHash.has(digest)) continue;
+        seenHash.add(digest);
+        const ext = (path.extname(new URL(abs).pathname).split('?')[0] || '.jpg').slice(0, 5) || '.jpg';
+        const name = `product-${digest}${ext.startsWith('.') ? ext : '.jpg'}`;
+        const file = path.join(ASSETS_DIR, name);
+        fs.writeFileSync(file, buf);
+        fitMedium(file);
+        const size = fs.statSync(file).size;
+        known.add(abs);
+        saved.push({
+          url: abs,
+          local: `assets/${name}`,
+          size,
+          contentType: (res.headers()['content-type'] || 'image/jpeg').split(';')[0],
+          kind: 'product',
+        });
+      }
+    } catch { /* one product page can fail */ }
+  }
+  try { await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 8000 }); } catch { /* the main copy is already saved */ }
+  if (!saved.length) throw new Error('No product pictures were found on this page.');
   return saved;
 }
 
@@ -437,6 +542,17 @@ async function main() {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  page.setDefaultNavigationTimeout(12000);
+  const heavyScript = /(?:google-analytics|googletagmanager|googleadservices|googlesyndication|doubleclick|facebook\.net|connect\.facebook|hotjar|segment\.(?:io|com)|sentry\.io|newrelic|nr-data\.net|optimizely|criteo|taboola|clarity\.ms|analytics\.tiktok|pinimg\.com|scorecardresearch|quantserve|demdex|omtrdc|adobedtm|ensighten|fullstory|mouseflow|intercom|zendesk|tawk\.to|recaptcha|bat\.bing|adnxs|chartbeat|contentsquare|quantummetric|dynatrace)/i;
+  await page.route('**/*', (route) => {
+    const req = route.request();
+    const type = req.resourceType();
+    const url = req.url();
+    if (type === 'websocket' || type === 'manifest') return route.abort();
+    if ((type === 'script' || type === 'eventsource' || type === 'xhr' || type === 'fetch' || type === 'ping') && heavyScript.test(url)) return route.abort();
+    return route.continue();
+  });
 
   page.on('response', async (response) => {
     try {
@@ -445,24 +561,12 @@ async function main() {
       const pathName = (() => { try { return new URL(url).pathname; } catch { return url; } })();
       const isImage = ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|avif|ico)(\?|$)/i.test(pathName);
       const isScript = ct.includes('javascript') || ct.includes('ecmascript') || /\.(js|mjs)(\?|$)/i.test(pathName);
-      const isAsset = isImage || isScript || ct.includes('css') || ct.includes('font') || ct.includes('woff') || /\.(css|woff2?|ttf)(\?|$)/i.test(pathName);
+      if (isScript) return;
+      const isAsset = isImage || ct.includes('css') || ct.includes('font') || ct.includes('woff') || /\.(css|woff2?|ttf)(\?|$)/i.test(pathName);
       if (!isAsset) return;
       if (MODE === 'images' && !isImage) return;
-      let buf = await response.body().catch(() => null);
+      const buf = await response.body().catch(() => null);
       if (!buf || !buf.length) return;
-
-      if (url.includes('/_next/image')) {
-        try {
-          const orig = new URL(url).searchParams.get('url');
-          if (orig) {
-            const decoded = decodeURIComponent(orig);
-            const abs = new URL(decoded, sourceUrl).href;
-            const extra = await context.request.get(abs);
-            const extraBuf = Buffer.from(await extra.body());
-            if (extraBuf.length) buf = extraBuf;
-          }
-        } catch {}
-      }
 
       if (buf.length > limits.maxFileMB * 1024 * 1024) return;
       if (totalSize + buf.length > limits.maxTotalMB * 1024 * 1024) return;
@@ -473,30 +577,28 @@ async function main() {
   });
 
   try {
+    const directCtl = new AbortController();
+    const directHtml = fetch(sourceUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal: directCtl.signal,
+    }).then(async (res) => (res.ok ? { html: await res.text(), url: res.url || sourceUrl } : null)).catch(() => null);
     let nav;
     let navError;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        nav = await page.goto(sourceUrl, { waitUntil: 'commit', timeout: 20000 });
-        navError = null;
-        break;
-      } catch (err) {
-        navError = err;
-        await page.goto('about:blank', { timeout: 5000 }).catch(() => {});
-      }
+    try {
+      nav = await page.goto(sourceUrl, { waitUntil: 'commit', timeout: 7000 });
+      directCtl.abort();
+    } catch (err) {
+      navError = err;
     }
     if (navError) {
-      const res = await fetch(sourceUrl, {
-        redirect: 'follow',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-        signal: AbortSignal.timeout(20000),
-      });
-      if (!res.ok) throw navError;
-      let html = await res.text();
-      const base = res.url || sourceUrl;
+      const direct = await directHtml;
+      if (!direct?.html) throw navError;
+      let html = direct.html;
+      const base = direct.url || sourceUrl;
       if (!/<base\s/i.test(html)) {
         if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (tag) => `${tag}<base href="${base}">`);
         else html = `<head><base href="${base}"></head>${html}`;
@@ -505,11 +607,14 @@ async function main() {
       warnings.push('The browser stalled, so the page was loaded from a direct download.');
       nav = null;
     }
-    await page.waitForSelector('body', { timeout: 15000 }).catch(() => {});
-    await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-    note('reading', 'Waiting for styles, fonts, and pictures');
-    await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
-    await page.waitForTimeout(200);
+    await page.waitForSelector('body', { timeout: 4000 }).catch(() => {});
+    note('reading', 'Reading this page only');
+    await page.waitForLoadState('domcontentloaded', { timeout: 6000 }).catch(() => {});
+    await page.waitForFunction(() => {
+      const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+      const painted = [...document.images].some((img) => img.naturalWidth > 80);
+      return painted || text.length > 240;
+    }, { timeout: 3500 }).catch(() => {});
 
     const dismissed = await page.evaluate(() => {
       const selectors = [
@@ -543,7 +648,8 @@ async function main() {
       }
       return false;
     }).catch(() => false);
-    if (dismissed) await page.waitForTimeout(300);
+    if (dismissed) await page.waitForTimeout(200);
+    await dismissLocation(page);
 
     async function wallKind() {
       const title = (await page.title()).toLowerCase();
@@ -560,10 +666,8 @@ async function main() {
 
     let wall = await wallKind();
     if (wall === 'check') {
-      for (let attempt = 0; attempt < 3 && wall === 'check'; attempt++) {
-        await page.waitForTimeout(5000);
-        wall = await wallKind();
-      }
+      await page.waitForTimeout(400);
+      wall = await wallKind();
     }
 
     const status = nav?.status?.() || 0;
@@ -597,9 +701,9 @@ async function main() {
       if (extraPages.length) warnings.push(`Also copied ${extraPages.length} page${extraPages.length === 1 ? '' : 's'} from the live links.`);
     }
 
-    note('scrolling', 'Loading images that appear further down the page');
+    note('scrolling', 'Loading images on this page');
     let lastH = 0;
-    const scrollBudget = Math.min(limits.maxScrollSteps || 20, 8);
+    const scrollBudget = OPTIONS.productShots ? 2 : 4;
     for (let i = 0; i < scrollBudget; i++) {
       const h = await page.evaluate(() => document.body?.scrollHeight || document.documentElement?.scrollHeight || 0).catch(() => 0);
       if (!h || h === lastH) break;
@@ -608,7 +712,7 @@ async function main() {
         const el = document.scrollingElement || document.documentElement;
         if (el) el.scrollBy(0, window.innerHeight * 0.85);
       }).catch(() => {});
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(60);
     }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await page.evaluate(async () => {
@@ -630,46 +734,78 @@ async function main() {
       });
     });
 
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.screenshot({ path: path.join(SHOTS_DIR, 'desktop.png'), fullPage: true, timeout: 8000 }).catch(async () => {
-      await page.screenshot({ path: path.join(SHOTS_DIR, 'desktop.png'), fullPage: false, timeout: 5000 }).catch(() => {});
-    });
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: path.join(SHOTS_DIR, 'mobile.png'), fullPage: false, timeout: 8000 }).catch(() => {});
-    await page.setViewportSize(viewport);
-    note('saving', 'Copying styles, fonts, and images onto this computer');
+    const shotPath = path.join(SHOTS_DIR, 'desktop.png');
+    await page.screenshot({ path: shotPath, fullPage: false, timeout: 4000 }).catch(() => {});
+    if (viewport.width <= 430) {
+      try { fs.copyFileSync(shotPath, path.join(SHOTS_DIR, 'mobile.png')); } catch { /* the desktop shot is the one the preview uses */ }
+    }
+    if (fs.existsSync(shotPath)) {
+      await page.evaluate(() => {
+        document.querySelectorAll('video').forEach((video) => {
+          const box = video.getBoundingClientRect();
+          if (box.width < 120 || box.height < 80) return;
+          const still = document.createElement('img');
+          still.src = 'screenshots/desktop.png';
+          still.alt = '';
+          still.setAttribute('data-proto-still', '1');
+          still.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;background:#111';
+          video.replaceWith(still);
+        });
+      }).catch(() => {});
+    }
+    const copySecs = Math.max(0, Math.round((Date.now() - started) / 1000));
+    note('saving', `Copying styles, fonts, and images · ${copySecs}s`);
 
     const pageAssets = await page.evaluate(() => {
-      const found = [];
-      const add = (value) => {
+      const photos = [];
+      const icons = [];
+      const add = (value, icon) => {
         if (!value || value.startsWith('data:') || value.startsWith('blob:') || value.startsWith('#')) return;
-        try { found.push(new URL(value, location.href).href); } catch {}
+        try {
+          const abs = new URL(value, location.href).href;
+          (icon || /\.svg($|\?)/i.test(abs) ? icons : photos).push(abs);
+        } catch {}
       };
-      document.querySelectorAll('img, source, video, link[rel~="stylesheet"], link[rel~="icon"]').forEach((el) => {
-        add(el.getAttribute('src'));
-        add(el.getAttribute('poster'));
-        add(el.getAttribute('href'));
-        const set = el.getAttribute('srcset') || '';
-        set.split(',').forEach((part) => add(part.trim().split(/\s+/)[0]));
+      const medium = (srcset) => {
+        let best = '';
+        let gap = Infinity;
+        for (const part of srcset.split(',')) {
+          const bits = part.trim().split(/\s+/);
+          const url = bits[0];
+          const width = parseInt((bits[1] || '0').replace(/\D/g, ''), 10) || 0;
+          if (!url) continue;
+          const next = width ? Math.abs(width - 1000) : 400;
+          if (next < gap) { gap = next; best = url; }
+        }
+        return best;
+      };
+      document.querySelectorAll('img, source, video, link[rel~="icon"]').forEach((el) => {
+        const icon = el.matches('link[rel~="icon"]') || /\.svg($|\?)/i.test(el.getAttribute('src') || '');
+        add(medium(el.getAttribute('srcset') || '') || el.getAttribute('src'), icon);
+        add(el.getAttribute('poster'), false);
+        add(el.getAttribute('href'), true);
       });
       document.querySelectorAll('[style]').forEach((el) => {
         const style = el.getAttribute('style') || '';
         const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
         let match;
-        while ((match = re.exec(style))) add(match[2]);
+        while ((match = re.exec(style))) add(match[2], /\.svg($|\?)/i.test(match[2]));
       });
-      return found.slice(0, 80);
-    }).catch(() => []);
+      return { photos: [...new Set(photos)].slice(0, 16), icons: [...new Set(icons)].slice(0, 16) };
+    }).catch(() => ({ photos: [], icons: [] }));
 
-    const assetCap = Date.now() - started > 45000 ? 16 : 48;
-    const pendingAssets = pageAssets.filter((assetUrl) => !resourceMap.has(assetUrl)).slice(0, assetCap);
+    const assetCap = Date.now() - started > 20000 ? 8 : 16;
+    note('saving', `Copying ${assetCap} images and icons`);
+    const pendingAssets = [...(pageAssets.icons || []), ...(pageAssets.photos || [])]
+      .filter((assetUrl) => assetUrl && !resourceMap.has(assetUrl))
+      .slice(0, assetCap);
     let assetCursor = 0;
     async function pullAsset() {
       while (assetCursor < pendingAssets.length && resourceMap.size <= 450) {
         const assetUrl = pendingAssets[assetCursor++];
         if (resourceMap.has(assetUrl)) continue;
         try {
-          const extra = await context.request.get(assetUrl, { timeout: 4000 });
+          const extra = await context.request.get(assetUrl, { timeout: 1200 });
           if (!extra.ok()) continue;
           const buf = Buffer.from(await extra.body());
           const ct = (extra.headers()['content-type'] || 'application/octet-stream').toLowerCase();
@@ -677,13 +813,15 @@ async function main() {
           if (totalSize + buf.length > limits.maxTotalMB * 1024 * 1024) return;
           totalSize += buf.length;
           resourceMap.set(assetUrl, { body: buf, contentType: ct, size: buf.length });
-          if (ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|avif|ico)$/i.test(assetUrl)) {
-            images.push({ url: assetUrl, size: buf.length, contentType: ct.split(';')[0] || 'image' });
+          if (ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|avif|ico)(\?|$)/i.test(assetUrl)) {
+            const icon = (pageAssets.icons || []).includes(assetUrl) || /\.(svg|ico)(\?|$)/i.test(assetUrl);
+            images.push({ url: assetUrl, size: buf.length, contentType: ct.split(';')[0] || 'image', kind: icon ? 'icon' : 'photo' });
           }
         } catch {}
       }
     }
-    await Promise.all(Array.from({ length: 8 }, pullAsset));
+    await Promise.all(Array.from({ length: 4 }, pullAsset));
+    note('saving', `${images.length} image${images.length === 1 ? '' : 's'} copied`);
 
     let renderedCss = '';
     try {
@@ -739,7 +877,9 @@ async function main() {
       let base = 'file';
       try { base = path.basename(new URL(orig).pathname) || 'file'; } catch {}
       const filename = `${sanitizeFilename(base.replace(/\.[^.]+$/, '') || 'file')}-${digest}${ext}`;
-      fs.writeFileSync(path.join(ASSETS_DIR, filename), data.body);
+      const savedPath = path.join(ASSETS_DIR, filename);
+      fs.writeFileSync(savedPath, data.body);
+      if (String(data.contentType || '').startsWith('image/')) fitMedium(savedPath);
       const local = `assets/${filename}`;
       seenHash.set(digest, local);
       urlToLocal.set(orig, local);
@@ -772,15 +912,71 @@ async function main() {
     }
 
     if (MODE === 'clone') {
-      await page.evaluate(() => {
+      await dismissLocation(page);
+      const visible = await page.evaluate(() => {
+        const medium = (srcset) => {
+          let best = '';
+          let gap = Infinity;
+          for (const part of String(srcset || '').split(',')) {
+            const bits = part.trim().split(/\s+/);
+            const url = bits[0];
+            const width = parseInt((bits[1] || '0').replace(/\D/g, ''), 10) || 0;
+            if (!url) continue;
+            const next = width ? Math.abs(width - 1000) : 400;
+            if (next < gap) { gap = next; best = url; }
+          }
+          return best;
+        };
+        const chosen = [];
         document.querySelectorAll('img').forEach((img) => {
-          const current = img.currentSrc || img.getAttribute('src') || '';
-          if (current && !current.startsWith('blob:') && !current.startsWith('data:')) img.setAttribute('src', current);
+          const source = img.parentElement && img.parentElement.querySelector ? img.parentElement.querySelector('source[srcset]') : null;
+          const picked = medium(img.getAttribute('srcset') || '') || medium(source && source.getAttribute('srcset') || '') || img.currentSrc || img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original') || '';
+          if (picked && !picked.startsWith('blob:') && !picked.startsWith('data:')) {
+            const sized = picked.replace(/\/(\d+)x(\d+)[a-z]*\.(jpe?g|png|webp)/i, (full, w, h, ext) => (Number(w) > 1000 ? `/800x800bb.${ext}` : full));
+            img.setAttribute('src', sized);
+            try { chosen.push(new URL(sized, location.href).href); } catch { /* skip */ }
+          }
           img.removeAttribute('srcset');
           img.setAttribute('loading', 'eager');
         });
         document.querySelectorAll('source').forEach((el) => el.removeAttribute('srcset'));
-      }).catch(() => {});
+        return [...new Set(chosen)].slice(0, 12);
+      }).catch(() => []);
+      let slot = 0;
+      await Promise.all(Array.from({ length: 3 }, async () => {
+        while (slot < visible.length) {
+          const assetUrl = visible[slot++];
+          if (urlToLocal.has(assetUrl) || urlToLocal.has(assetUrl.split('?')[0])) continue;
+          try {
+            const extra = await context.request.get(assetUrl, { timeout: 1200 });
+            if (!extra.ok()) continue;
+            const buf = Buffer.from(await extra.body());
+            if (buf.length < 40 || buf.length > 4 * 1024 * 1024) continue;
+            const digest = hashShort(buf);
+            if (seenHash.has(digest)) {
+              urlToLocal.set(assetUrl, seenHash.get(digest));
+              continue;
+            }
+            let ext = '';
+            try { ext = path.extname(new URL(assetUrl).pathname).toLowerCase(); } catch { ext = ''; }
+            if (!ext || ext.length > 5) ext = '.jpg';
+            const filename = `pic-${digest}${ext}`;
+            const savedPath = path.join(ASSETS_DIR, filename);
+            fs.writeFileSync(savedPath, buf);
+            if (!/\.svg$/i.test(ext)) fitMedium(savedPath);
+            const local = `assets/${filename}`;
+            urlToLocal.set(assetUrl, local);
+            urlToLocal.set(assetUrl.split('?')[0], local);
+            seenHash.set(digest, local);
+            images.push({
+              url: assetUrl,
+              size: fs.statSync(savedPath).size,
+              contentType: /\.svg$/i.test(ext) ? 'image/svg+xml' : 'image/jpeg',
+              kind: /\.svg$|\.ico$/i.test(ext) ? 'icon' : 'photo',
+            });
+          } catch { /* one picture can fail */ }
+        }
+      }));
       let html = await page.content();
       html = postProcessHtml(html);
       html = html.replace(/(src|href)=["']([^"']+)["']/gi, (m, attr, val) => {
@@ -857,14 +1053,28 @@ async function main() {
     });
     fs.writeFileSync(path.join(OUT_DIR, 'outline.json'), JSON.stringify(outline, null, 2));
 
+    if (OPTIONS.productShots) {
+      note('saving', 'Saving the first two pictures from each product');
+      try {
+        const shots = await collectProductShots(page, context, sourceUrl, images.map((img) => img.url));
+        images.push(...shots);
+      } catch (err) {
+        warnings.push(err.message || 'Product pictures were not all saved.');
+      }
+    }
+
     const keepSmall = OPTIONS.showSmallImages === true;
     const listed = images
-      .filter((img) => keepSmall || img.size >= 1500)
-      .map((img) => ({
-        ...img,
-        local: urlToLocal.get(img.url) || null,
-        small: img.size < 1500,
-      }));
+      .map((img) => {
+        const local = img.local || urlToLocal.get(img.url) || null;
+        let size = img.size;
+        if (local) {
+          try { size = fs.statSync(path.join(OUT_DIR, local)).size; } catch { /* keep the downloaded size */ }
+        }
+        const kind = img.kind || (/\.svg$|\.ico$/i.test(local || img.url || '') || String(img.contentType || '').includes('svg') ? 'icon' : 'photo');
+        return { ...img, local, size, kind, small: kind !== 'product' && kind !== 'icon' && size < 400 };
+      })
+      .filter((img) => img.local && (keepSmall || !img.small));
 
     const manifest = {
       url: sourceUrl,
@@ -928,6 +1138,12 @@ async function finalize(manifest) {
     process.exit(0);
   }
   const stats = { images: manifest.imageCount, totalMB: manifest.totalMB, warnings: manifest.warnings };
+  await supabasePatch({
+    status: 'done',
+    error: null,
+    stats,
+    finished_at: new Date().toISOString(),
+  });
   const fullZip = path.join(ZIP_DIR, `${JOB_ID}.zip`);
   const imgZip = path.join(ZIP_DIR, `${JOB_ID}-images.zip`);
   try {
@@ -943,12 +1159,6 @@ async function finalize(manifest) {
     }
     console.error('Storage upload failed', err.message || err);
   }
-  await supabasePatch({
-    status: 'done',
-    error: null,
-    stats,
-    finished_at: new Date().toISOString(),
-  });
   console.log(`Done job ${JOB_ID}: ${manifest.imageCount} images, ${manifest.totalMB} MB`);
   process.exit(0);
 }
