@@ -128,7 +128,7 @@
           <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button class="tool" type="button" id="clipBtn" data-tip="Attach a saved page" aria-label="Attach">
+          <button class="tool" type="button" id="clipBtn" data-tip="Attach an image reference" aria-label="Attach an image reference" disabled>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 12.5l6.2-6.2a3 3 0 1 1 4.2 4.2l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1"/></svg>
           </button>
           <div class="grow"></div>
@@ -232,6 +232,7 @@
               </div>
               <div class="pick-hint" id="pickHint" hidden>Click an element. It will be added to the message.</div>
               <iframe id="stage" class="hidden" title="Site preview" sandbox="allow-scripts allow-forms allow-popups"></iframe>
+              <span class="home-bar" aria-hidden="true"></span>
             </div>
           </div>
         </div>

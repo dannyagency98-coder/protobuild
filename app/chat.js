@@ -224,6 +224,7 @@ function syncStageActions(job) {
   tuneBtn(document.querySelector('#stageBar > .stage-actions [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
   tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Share ${name}` : wait);
   tuneBtn(document.getElementById('galleryBtn'), !!job?.id, 'Gallery', job?.id ? `Images from ${name}` : 'Open a capture to see its images');
+  tuneBtn(document.getElementById('clipBtn'), ready, '', ready ? 'Attach an image reference for this page' : 'Available after a page is saved');
   tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
@@ -2220,9 +2221,7 @@ function paintStarters() {
     ];
   const html = items.map(([title, sub, prompt]) => `<button type="button" data-prompt="${esc(prompt)}"><strong>${esc(title)}</strong><span>${esc(sub)}</span></button>`).join('');
   const home = document.getElementById('starters');
-  const stage = document.getElementById('stageStarters');
   if (home) home.innerHTML = html;
-  if (stage) stage.innerHTML = html;
   bindStarters();
 }
 paintStarters();
@@ -2652,8 +2651,23 @@ function openThread(e) {
 }
 
 document.getElementById('plusBtn').onclick = openPlus;
-document.getElementById('clipBtn').onclick = () => document.getElementById('file').click();
-document.getElementById('stageUpload')?.addEventListener('click', () => document.getElementById('file').click());
+function pickFile(mode) {
+  const input = document.getElementById('file');
+  if (!input) return;
+  input.dataset.mode = mode;
+  input.accept = mode === 'ref'
+    ? 'image/png,image/jpeg,image/webp,image/gif'
+    : '.html,.htm,.zip,text/html';
+  input.click();
+}
+document.getElementById('clipBtn').onclick = () => {
+  if (!activeJob || activeJob.status !== 'done') {
+    toast('Attach a reference after a page is saved.');
+    return;
+  }
+  pickFile('ref');
+};
+document.getElementById('stageUpload')?.addEventListener('click', () => pickFile('page'));
 const refs = [];
 
 function paintRefs() {
@@ -2671,9 +2685,13 @@ function paintRefs() {
 
 function addReference(file) {
   if (!file) return;
+  if (!activeJob || activeJob.status !== 'done') {
+    toast('Attach a reference after a page is saved.');
+    return;
+  }
   const image = /^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(file.name || '');
   if (!image) {
-    uploadFile(file).catch((err) => say('ai', err.message));
+    toast('Attach an image. A saved HTML or ZIP page goes in Capture.');
     return;
   }
   if (refs.length >= 2) { toast('Two reference images at a time.'); return; }
@@ -2688,8 +2706,11 @@ function addReference(file) {
 
 document.getElementById('file').onchange = (e) => {
   const file = e.target.files?.[0];
+  const mode = e.target.dataset.mode || 'page';
   e.target.value = '';
-  if (file) addReference(file);
+  if (!file) return;
+  if (mode === 'ref') addReference(file);
+  else uploadFile(file).catch((err) => say('ai', err.message));
 };
 
 const chatPane = document.querySelector('.chat');
@@ -2792,8 +2813,8 @@ function onThemeClick(e) {
 document.getElementById('settingsTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('accountTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('acctSettings').onclick = () => showSettingsPanel('interface');
-document.getElementById('acctUpload').onclick = () => document.getElementById('file').click();
-document.getElementById('captureUpload')?.addEventListener('click', () => document.getElementById('file').click());
+document.getElementById('acctUpload').onclick = () => pickFile('page');
+document.getElementById('captureUpload')?.addEventListener('click', () => pickFile('page'));
 document.getElementById('acctWidths').onclick = () => document.getElementById('prefResetWidths').click();
 document.getElementById('acctImages').onclick = () => {
   if (!activeJob) { toast('Open a capture first.'); return; }
