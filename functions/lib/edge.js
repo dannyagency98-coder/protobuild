@@ -1,4 +1,5 @@
 import { assertPublicHttpUrl } from './public-url.js';
+import { captureInBrowser } from './browse.js';
 
 export async function currentUser(request, env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
@@ -62,34 +63,8 @@ export async function readStoredJob(env, jobId) {
   return obj.json().catch(() => null);
 }
 
-export async function queueCapture(env, user, body) {
-  if (!env.R2) {
-    return json({ error: 'R2 is not connected, so this deploy cannot store a capture.' }, 503);
-  }
-  if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) {
-    return json({ error: 'GitHub Actions is not configured, so this deploy cannot start a capture.' }, 503);
-  }
-  const mode = body.mode === 'images' ? 'images' : 'clone';
-  let url = '';
-  try { url = await assertPublicHttpUrl(body.url); }
-  catch (err) { return json({ error: err.message || 'That link is not allowed.' }, 400); }
-  const created = {
-    id: crypto.randomUUID(),
-    user_id: user.id,
-    source_url: url,
-    mode,
-    options: body.options || {},
-    status: 'queued',
-    error: null,
-    stats: {},
-    share_token: null,
-    share_expires_at: null,
-    rights_confirmed: true,
-    created_at: new Date().toISOString(),
-    finished_at: null,
-  };
-  await putJob(env, created);
-  await rememberJob(env, user.id, created.id);
+async function dispatchGithub(env, job) {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return false;
   const workflow = env.GITHUB_WORKFLOW_FILE || 'capture.yml';
   const dispatched = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`, {
     method: 'POST',
@@ -102,18 +77,66 @@ export async function queueCapture(env, user, body) {
     body: JSON.stringify({
       ref: env.GITHUB_REF || 'main',
       inputs: {
-        job_id: created.id,
-        mode,
-        url,
-        options: JSON.stringify(created.options || {}),
+        job_id: job.id,
+        mode: job.mode,
+        url: job.source_url,
+        options: JSON.stringify(job.options || {}),
       },
     }),
   });
-  if (dispatched.status !== 204) {
+  return dispatched.status === 204;
+}
+
+export async function queueCapture(env, user, body, waitUntil) {
+  if (!env.R2) {
+    return json({ error: 'R2 is not connected, so this deploy cannot store a capture.' }, 503);
+  }
+  const canBrowser = !!(env.BROWSER && typeof waitUntil === 'function');
+  const canGitHub = !!(env.GITHUB_TOKEN && env.GITHUB_REPO);
+  if (!canBrowser && !canGitHub) {
+    return json({ error: 'No browser is connected for captures.' }, 503);
+  }
+  const mode = body.mode === 'images' ? 'images' : 'clone';
+  let url = '';
+  try { url = await assertPublicHttpUrl(body.url); }
+  catch (err) { return json({ error: err.message || 'That link is not allowed.' }, 400); }
+  const created = {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    source_url: url,
+    mode,
+    options: body.options || {},
+    status: 'running',
+    phase: 'opening',
+    phaseDetail: 'Previewing the screen',
+    error: null,
+    stats: {},
+    share_token: null,
+    share_expires_at: null,
+    rights_confirmed: true,
+    created_at: new Date().toISOString(),
+    finished_at: null,
+  };
+  await putJob(env, created);
+  await rememberJob(env, user.id, created.id);
+  if (canBrowser) {
+    waitUntil(captureInBrowser(env, created).catch(async () => {
+      const queued = await dispatchGithub(env, created);
+      if (queued) {
+        await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Previewing the screen' });
+        return;
+      }
+      await putJob(env, { ...created, status: 'failed', error: 'The page did not open.', finished_at: new Date().toISOString() });
+    }));
+    return json(created);
+  }
+  const queued = await dispatchGithub(env, created);
+  if (!queued) {
     await putJob(env, { ...created, status: 'failed', error: 'The capture workflow did not start.', finished_at: new Date().toISOString() });
     return json({ error: 'The capture workflow did not start.' }, 502);
   }
-  return json({ id: created.id, status: 'queued', source_url: url, mode, user_id: user.id, created_at: created.created_at });
+  await putJob(env, { ...created, status: 'queued' });
+  return json({ ...created, status: 'queued' });
 }
 
 export async function queueUpload(env, user, file) {

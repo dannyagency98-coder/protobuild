@@ -2,6 +2,9 @@
   "name": "prototype-builder",
   "version": "1.0.0",
   "private": true,
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0"
+  },
   "description": "Private website prototype capture tool",
   "scripts": {
     "dev": "node server/index.js",

@@ -58,7 +58,7 @@ export async function onRequest(context) {
   if (request.method === 'POST' && path.endsWith('/jobs') && !/\/jobs\/[^/]+/.test(path)) {
     const body = await request.json().catch(() => ({}));
     if (!body.rights_confirmed) return json({ error: 'Rights confirmation required' }, 400);
-    return queueCapture(env, user, body);
+    return queueCapture(env, user, body, context.waitUntil?.bind(context));
   }
 
   const jobAction = path.match(/\/jobs\/([^/]+)(?:\/([^/]+))?$/);
@@ -122,7 +122,7 @@ export async function onRequest(context) {
   }
 
   if (request.method === 'POST' && path.endsWith('/agent')) {
-    return handleAgent(request, env, user);
+    return handleAgent(request, env, user, context.waitUntil?.bind(context));
   }
 
   return json({ error: 'Not found' }, 404);
@@ -182,7 +182,7 @@ function visiblePage(html) {
   return String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200);
 }
 
-async function handleAgent(request, env, user) {
+async function handleAgent(request, env, user, waitUntil) {
   const body = await request.json().catch(() => ({}));
   const message = String(body.message || '');
   const purpose = body.purpose || '';
@@ -216,10 +216,10 @@ async function handleAgent(request, env, user) {
   const url = firstUrl(message);
   if (url && purpose !== 'edit') {
     const mode = /\bimages?\s*only\b|\bonly images\b/i.test(message) ? 'images' : 'clone';
-    const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) });
+    const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) }, waitUntil);
     const payload = await queued.json();
     if (!queued.ok) return sse({ reply: payload.error || 'That link was not copied.', job: null });
-    return sse({ reply: `Copying ${hostOf(payload.source_url)}.`, job: publicJob(env, payload), pendingLine: true });
+    return sse({ reply: 'Previewing the screen.', job: publicJob(env, payload), pendingLine: true });
   }
 
   if (jobId && /\b(share|live link)\b/i.test(message)) {

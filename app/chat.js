@@ -5,6 +5,8 @@ const pop = document.getElementById('popover');
 let jobs = [];
 let activeJob = null;
 let thread = [];
+const goneIds = new Set();
+let screenMode = '';
 function accountId() {
   const raw = readAuth()?.id || 'local';
   return String(raw).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 48) || 'local';
@@ -218,8 +220,9 @@ function syncStageActions(job) {
   const file = job ? zipName(job) : '';
   const imagesFile = job ? zipName(job, 'images') : '';
   const wait = 'Available when the preview finishes.';
-  tuneBtn(document.querySelector('#stageBar [data-open]'), ready && !!job.previewUrl, 'Open', ready ? `Open ${name}` : wait);
-  tuneBtn(document.querySelector('#stageBar [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
+  tuneBtn(document.querySelector('#stageBar > .stage-actions [data-open]'), ready && !!job.previewUrl, 'Open', ready ? `Open ${name} in a new tab` : wait);
+  tuneBtn(document.querySelector('#stageBar > .stage-actions [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
+  tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Copy a link to ${name}` : wait);
   tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
@@ -794,9 +797,9 @@ function bindSplits() {
 
 let previewDevice = localStorage.getItem('pb-device') || 'desktop';
 
-function applyDevice(name) {
-  previewDevice = name === 'tablet' || name === 'desktop' ? name : 'phone';
-  localStorage.setItem('pb-device', previewDevice);
+function applyDevice() {
+  previewDevice = 'phone';
+  localStorage.setItem('pb-device', 'phone');
   const canvas = document.getElementById('phoneView');
   if (canvas) canvas.dataset.device = previewDevice;
   document.querySelectorAll('#deviceSwitch [data-device]').forEach((btn) => {
@@ -1054,16 +1057,18 @@ function showStage(job, opts = {}) {
   }
   const previewUrl = job.previewUrl || (job.id ? '/preview/' + job.id + '/' : '');
   const previewReady = job.status === 'done' || job.phase === 'packaging';
+  const editing = screenMode === 'edit' && previewReady;
   frame.title = siteSlug(job);
   if (previewReady && previewUrl) {
     const next = previewAddress(job, opts.reload);
     if (opts.reload || frame.getAttribute('src') !== next) frame.src = next;
     frame.classList.remove('hidden');
-    empty?.classList.add('hidden');
+    empty?.classList.toggle('hidden', !editing && !(job.status === 'queued' || job.status === 'running'));
+    empty?.classList.toggle('veil', !!editing);
   } else {
     frame.classList.add('hidden');
     frame.removeAttribute('src');
-    empty?.classList.remove('hidden');
+    empty?.classList.remove('hidden', 'veil');
   }
   if (title) title.textContent = deviceLabel();
   loadGallery(job);
@@ -1071,7 +1076,6 @@ function showStage(job, opts = {}) {
   const chatTitle = document.getElementById('chatTitle');
   const name = (job.source_url || 'Uploaded file').replace(/^https?:\/\//, '').replace(/\/$/, '');
   if (host) {
-    const scanning = job.status === 'queued' || job.status === 'running';
     let nameEl = host.querySelector('.host-name');
     let badge = document.getElementById('stageClock');
     if (!nameEl || !badge) {
@@ -1083,9 +1087,9 @@ function showStage(job, opts = {}) {
       badge.className = 'stage-clock';
       host.append(nameEl, badge);
     }
-    nameEl.textContent = scanning ? `Scanning ${name}` : name;
-    badge.hidden = !scanning;
-    badge.textContent = scanning ? formatElapsed(job.created_at) : '';
+    nameEl.textContent = name;
+    badge.hidden = true;
+    badge.textContent = '';
   }
   if (chatTitle) chatTitle.textContent = name;
   const mobileTitle = document.getElementById('mobileTitle');
@@ -1096,11 +1100,13 @@ function showStage(job, opts = {}) {
   }
   const bar = document.getElementById('stageBar');
   if (!bar || !job.id) return;
-  bar.querySelector('[data-open]').onclick = () => {
+  const openBtn = bar.querySelector(':scope > .stage-actions [data-open]');
+  const zipBtn = bar.querySelector(':scope > .stage-actions [data-zip]');
+  if (openBtn) openBtn.onclick = () => {
     if (job.status === 'done' && job.previewUrl) window.open(job.previewUrl, '_blank', 'noopener');
     else toast('Available when the preview finishes.', { error: true });
   };
-  bar.querySelector('[data-zip]').onclick = () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job));
+  if (zipBtn) zipBtn.onclick = () => download('/api/jobs/' + job.id + '/zip?type=full', zipName(job));
   syncStageActions(job);
 }
 
@@ -1112,19 +1118,22 @@ function previewAddress(job, reload) {
   return parts.length ? base + (base.includes('?') ? '&' : '?') + parts.join('&') : base;
 }
 
+function screenLabel() {
+  return screenMode === 'edit' ? 'Editing the screen' : 'Previewing the screen';
+}
+
 function paintStageEmpty(job) {
   const idle = document.getElementById('emptyIdle');
   const steps = document.getElementById('captureSteps');
   const fail = document.getElementById('emptyFail');
-  const live = !!(job && (job.status === 'queued' || job.status === 'running'));
+  const scanning = !!(job && (job.status === 'queued' || job.status === 'running'));
+  const editing = screenMode === 'edit';
   const bad = !!(job && (job.status === 'failed' || job.status === 'blocked') && !/stopped/i.test(job.error || ''));
-  if (idle) idle.hidden = live || bad;
+  if (idle) idle.hidden = scanning || editing || bad;
   if (steps) {
-    steps.hidden = !live;
+    steps.hidden = !(scanning || editing);
     const line = document.getElementById('captureLine');
-    const clock = document.getElementById('captureClock');
-    if (live && line) line.textContent = scanText(job);
-    if (clock) clock.textContent = live ? formatElapsed(job.created_at) : '';
+    if (line && (scanning || editing)) line.textContent = screenLabel();
   }
   if (fail) {
     fail.hidden = !bad;
@@ -1149,7 +1158,7 @@ function previewCard(job) {
 
 async function refreshJobs() {
   const data = await api('/api/jobs');
-  jobs = data.jobs || [];
+  jobs = (data.jobs || []).filter((job) => job && !goneIds.has(job.id));
   renderHistory();
 }
 
@@ -1324,10 +1333,10 @@ function renderLive(box, job) {
   }
   let line = live.querySelector('.scan-line span');
   if (!line) {
-    live.innerHTML = `<p class="scan-line"><i class="spin" aria-hidden="true"></i><span></span><span data-scan-clock>${esc(formatElapsed(job.created_at))}</span></p>`;
+    live.innerHTML = '<p class="scan-line"><i class="spin" aria-hidden="true"></i><span></span></p>';
     line = live.querySelector('.scan-line span');
   }
-  if (line) line.textContent = scanText(job);
+  if (line) line.textContent = screenLabel();
 }
 
 function statusLine(job) {
@@ -1335,7 +1344,7 @@ function statusLine(job) {
   if (job.status === 'blocked') return cleanError(job.error) || 'This site blocked the scan. Attach a saved copy of the page.';
   if (job.status === 'failed' && /stopped/i.test(job.error || '')) return 'Stopped.';
   if (job.status === 'failed') return cleanError(job.error) || 'The scan did not finish. Try again, or attach a saved copy of the page.';
-  return scanText(job);
+  return screenLabel();
 }
 
 function wireCard(box, job) {
@@ -1694,6 +1703,8 @@ async function readEvents(res, onEvent) {
 }
 
 async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
+  screenMode = activeJob?.status === 'done' ? 'edit' : 'preview';
+  if (activeJob) showStage(activeJob);
   try {
     const res = await agentFetch({
       message: trimmed,
@@ -1772,6 +1783,10 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
     setSendMode(false);
   } finally {
     if (inflight === ctrl) inflight = null;
+    if (screenMode) {
+      screenMode = '';
+      if (activeJob) showStage(activeJob);
+    }
   }
 }
 
@@ -2311,6 +2326,7 @@ async function removeCapture(id) {
     danger: true,
   });
   if (!yes) return;
+  goneIds.add(id);
   jobs = jobs.filter((item) => item.id !== id);
   try {
     const sessionId = chatIdFor(id);
@@ -2322,7 +2338,11 @@ async function removeCapture(id) {
   else renderHistory();
   closePop();
   toast('Capture removed.');
-  api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch((err) => toast(err.message));
+  api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch((err) => {
+    goneIds.delete(id);
+    toast(err.message);
+    refreshJobs();
+  });
 }
 
 function dropChat(id) {
@@ -2336,6 +2356,7 @@ function dropChat(id) {
 }
 
 async function clearHistory() {
+  jobs.forEach((job) => goneIds.add(job.id));
   jobs = [];
   try {
     const keys = [];
@@ -2349,7 +2370,10 @@ async function clearHistory() {
   renderHistory();
   closePop();
   toast('History cleared.');
-  api('/api/jobs', { method: 'DELETE' }).catch((err) => toast(err.message));
+  api('/api/jobs', { method: 'DELETE' }).catch((err) => {
+    toast(err.message);
+    refreshJobs();
+  });
 }
 
 async function clearOpenChat() {
@@ -2789,7 +2813,7 @@ document.querySelectorAll('#deviceSwitch [data-device]').forEach((btn) => {
     applyDevice(btn.dataset.device);
   });
 });
-applyDevice(previewDevice);
+applyDevice();
 document.getElementById('viewImages').onclick = () => {
   if (!activeJob) { toast('Open a capture to see its images.'); return; }
   setView('images');
@@ -2886,6 +2910,10 @@ stream?.addEventListener('scroll', () => {
   if (followThread) document.getElementById('newText')?.classList.add('hidden');
 });
 document.getElementById('newText')?.addEventListener('click', () => stickThread(true));
+document.getElementById('shareQuick')?.addEventListener('click', () => {
+  if (!activeJob || activeJob.status !== 'done') { toast('Available when the preview finishes.'); return; }
+  share(activeJob, 7);
+});
 document.getElementById('moreBtn')?.addEventListener('click', (event) => {
   event.stopPropagation();
   document.getElementById('stageMenu')?.classList.toggle('hidden');
