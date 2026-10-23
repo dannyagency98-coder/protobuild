@@ -178,7 +178,8 @@ function tuneBtn(el, on, label, tip) {
   if (!el) return;
   el.disabled = !on;
   if (label) setBtnLabel(el, label);
-  if (tip) {
+  const icon = el.classList.contains('icon-btn') || el.classList.contains('tool') || el.classList.contains('icon-quiet') || el.classList.contains('mini');
+  if (tip && icon) {
     el.dataset.tip = tip;
     el.title = tip;
     el.setAttribute('aria-label', tip);
@@ -1820,6 +1821,10 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments 
         if (frame) frame.src = data.job.previewUrl + '?t=' + Date.now();
       }
       showStage(data.job, { reload: !!data.edited });
+      if (data.openGallery) {
+        setView('images');
+        loadGallery(data.job);
+      }
       if (jobLive(data.job)) poll(data.job.id, box);
       else if (data.showPreview && data.job.status === 'done') {
         box.insertAdjacentHTML('beforeend', previewCard(data.job));
@@ -2184,16 +2189,7 @@ function openChat(id) {
 document.getElementById('newChat').onclick = () => {
   closeSettingsPage();
   closeDrawer();
-  if (activeJob) {
-    const job = activeJob;
-    stream.innerHTML = '';
-    thread = [];
-    chatId = newChatId();
-    addressMode = 'push';
-    say('ai', `${siteSlug(job)} stays in the preview. This is a new thread on that page.`);
-    input.focus();
-    return;
-  }
+  closePop();
   addressMode = 'push';
   resetChat();
   refreshJobs();
@@ -2212,7 +2208,7 @@ document.querySelectorAll('#paneSwitch [data-pane]').forEach((btn) => {
 });
 function openConnected(anchor) {
   const ready = activeJob?.status === 'done';
-  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, share a dev link, or download the page. An attached file stays in this chat until the prompt says what to do with it.</p><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="upload">Attach a page</button><button class="menu-act" type="button" data-go="share" ${ready ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${ready ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${ready ? '' : 'disabled'}>Reload preview</button><button class="menu-act" type="button" data-go="fresh">New chat</button>`, anchor);
+  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, share a dev link, or download the page. An attached file stays in this chat until the prompt says what to do with it.</p><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="upload">Attach a page</button><button class="menu-act" type="button" data-go="share" ${ready ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${ready ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${ready ? '' : 'disabled'}>Reload preview</button><button class="menu-act" type="button" data-go="fresh">New chat</button>`, anchor, true);
   wirePop({
     scan: () => fillPrompt('scan '),
     upload: () => { closePop(); pickFile('ref'); },
@@ -2416,15 +2412,16 @@ function confirmAsk({ title, body, ok = 'Confirm', danger = false }) {
   });
 }
 
-function showPop(html, anchor) {
+function showPop(html, anchor, wide) {
   pop.classList.remove('account-menu');
+  pop.classList.toggle('wide', !!wide);
   pop.innerHTML = html;
   pop.classList.remove('hidden');
   syncVeil();
   const rect = (anchor || document.getElementById('helpBtn')).getBoundingClientRect();
   const side = document.querySelector('.side').getBoundingClientRect();
   const inSide = rect.left >= side.left - 2 && rect.right <= side.right + 2;
-  const width = inSide ? Math.min(220, Math.max(180, side.width - 16)) : 220;
+  const width = wide ? Math.min(400, window.innerWidth - 24) : (inSide ? Math.min(220, Math.max(180, side.width - 16)) : 220);
   let left = inSide ? side.left + 8 : rect.left;
   if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
   pop.style.width = width + 'px';
@@ -2707,7 +2704,7 @@ function openHelp(e) {
 }
 
 function openPlus(e) {
-  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, attach a file, then say what to do with it. Share and download use the page on the phone.</p><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Attach a page</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${activeJob?.status === 'done' ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${activeJob?.status === 'done' ? '' : 'disabled'}>Reload preview</button>`, e.currentTarget);
+  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, attach a file, then say what to do with it. Share and download use the page on the phone.</p><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Attach a page</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${activeJob?.status === 'done' ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${activeJob?.status === 'done' ? '' : 'disabled'}>Reload preview</button>`, e.currentTarget, true);
   const field = document.getElementById('scanUrl');
   document.getElementById('scanUrlForm')?.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -2748,7 +2745,7 @@ function openDevice(e) {
 }
 
 function openThread(e) {
-  showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
+  showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget, true);
   wirePop({
     fresh: () => { closePop(); document.getElementById('newChat').click(); },
     id: (btn) => { copyText(chatLink(), 'Copied.', btn); },

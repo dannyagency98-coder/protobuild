@@ -120,6 +120,26 @@ async function settleImages(page) {
       const full = abs(value);
       if (full && /^https?:/i.test(full)) found.push(full);
     };
+    document.querySelectorAll('video').forEach((video) => {
+      const source = video.querySelector('source');
+      const chosen = abs(video.currentSrc)
+        || abs(video.getAttribute('src'))
+        || abs(source && (source.getAttribute('src') || source.getAttribute('data-src')))
+        || abs(video.getAttribute('data-src'));
+      if (chosen) {
+        video.setAttribute('src', chosen);
+        video.setAttribute('muted', '');
+        video.setAttribute('autoplay', '');
+        video.setAttribute('loop', '');
+        video.setAttribute('playsinline', '');
+        push(chosen);
+      }
+      const poster = abs(video.getAttribute('poster') || video.getAttribute('data-poster'));
+      if (poster) {
+        video.setAttribute('poster', poster);
+        push(poster);
+      }
+    });
     document.querySelectorAll('img').forEach((img) => {
       const source = img.parentElement && img.parentElement.querySelector ? img.parentElement.querySelector('source[srcset]') : null;
       const chosen = abs(pick(img.getAttribute('srcset') || ''))
@@ -137,7 +157,7 @@ async function settleImages(page) {
       img.removeAttribute('srcset');
       img.setAttribute('loading', 'eager');
     });
-    document.querySelectorAll('source').forEach((el) => el.removeAttribute('srcset'));
+    document.querySelectorAll('picture source').forEach((el) => el.removeAttribute('srcset'));
     document.querySelectorAll('[style*="url"]').forEach((el) => {
       const style = el.getAttribute('style') || '';
       const next = style.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (all, quote, val) => {

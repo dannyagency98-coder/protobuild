@@ -460,17 +460,19 @@ html[data-history="off"] #splitSide {
   line-height: 1.45;
 }
 .edit-box textarea:focus {
-  border-color: #f4f4f5;
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+  border-color: #5c5c5c;
+  box-shadow: none;
+  outline: none;
 }
-.edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .edit-actions button {
-  height: 32px;
-  border-radius: 999px;
-  padding: 0 14px;
+  height: 26px;
+  border-radius: 8px;
+  padding: 0 10px;
   border: 1px solid #333;
   background: transparent;
   color: inherit;
+  font-size: 0.75rem;
 }
 .edit-actions button[type="submit"] { background: #fff; color: #111; border-color: #fff; }
 .edit-actions button[type="submit"]:hover { filter: brightness(0.92); }
@@ -1246,6 +1248,18 @@ html[data-history="off"] #splitSide {
   min-height: 30px;
 }
 .menu-act:hover, .menu-act:focus-visible { background: #222; }
+.popover.wide {
+  width: 400px;
+  min-width: 320px;
+  max-width: min(400px, calc(100vw - 24px));
+  padding: 16px;
+  border-radius: 16px;
+}
+.popover.wide h3 { margin: 0 4px 8px; font-size: 1rem; }
+.popover.wide .menu-note { margin: 0 4px 12px; font-size: 0.84rem; line-height: 1.45; }
+.popover.wide .menu-act { min-height: 40px; padding: 8px 10px; font-size: 0.92rem; border-radius: 10px; }
+.popover.wide .scan-url { margin: 0 0 12px; }
+.popover.wide .scan-url input { height: 40px; }
 .menu-act.danger { color: #f0b4b4; }
 .menu-act.danger:hover, .menu-act.danger:focus-visible { background: #2a1717; }
 .menu-act:disabled { opacity: 0.38; }
@@ -1907,6 +1921,10 @@ html[data-suggestions="off"] .starters { display: none !important; }
 .set-action:hover { background: #1c1c1c; border-color: #3a3a3a; }
 .set-action:active { transform: scale(0.96); }
 .set-action.danger { color: #f0b4b4; border-color: #5a3030; }
+#prefSignOut { background: #c4362c; color: #fff; border-color: #c4362c; }
+#prefSignOut:hover { background: #a82e26; border-color: #a82e26; color: #fff; }
+html[data-theme="light"] #prefSignOut,
+html[data-theme="light"] #prefSignOut:hover { background: #c4362c; color: #fff; border-color: #c4362c; }
 .set-action.danger:hover { background: #2a1717; }
 .set-action:disabled,
 .set-action:disabled:hover,
@@ -2073,7 +2091,7 @@ html[data-theme="light"] .mini { color: #555; }
 html[data-theme="light"] .mini:hover { background: #f3f3f4; color: #111; }
 html[data-theme="light"] .mini.on { background: #111; color: #fff; }
 html[data-theme="light"] .edit-box textarea { background: #fff; color: #171717; border-color: #e4e4e4; }
-html[data-theme="light"] .edit-box textarea:focus { border-color: #171717; box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06); }
+html[data-theme="light"] .edit-box textarea:focus { border-color: #cfcfcf; box-shadow: none; }
 html[data-theme="light"] .edit-actions button { background: #fff; color: #171717; border-color: #e4e4e4; }
 html[data-theme="light"] .edit-actions button[type="submit"] { background: #171717; color: #fff; border-color: #171717; }
 html[data-theme="light"] .edit-actions button[type="button"]:hover { background: #f3f3f4; }
@@ -2093,9 +2111,21 @@ html[data-theme="light"] .view-switch button { color: #555; }
 html[data-theme="light"] .view-switch button.on { background: #111; color: #fff; }
 html[data-theme="light"] .view-switch .count { background: #eee; color: #333; }
 html[data-theme="light"] .view-switch button.on .count { background: #333; color: #fff; }
-[data-tip] { position: relative; }
-[data-tip]:hover::after,
-[data-tip]:focus-visible::after {
+.icon-btn[data-tip],
+.tool[data-tip],
+.icon-quiet[data-tip],
+.mini[data-tip],
+.theme-seg button[data-tip] { position: relative; }
+.icon-btn[data-tip]:hover::after,
+.icon-btn[data-tip]:focus-visible::after,
+.tool[data-tip]:hover::after,
+.tool[data-tip]:focus-visible::after,
+.icon-quiet[data-tip]:hover::after,
+.icon-quiet[data-tip]:focus-visible::after,
+.mini[data-tip]:hover::after,
+.mini[data-tip]:focus-visible::after,
+.theme-seg button[data-tip]:hover::after,
+.theme-seg button[data-tip]:focus-visible::after {
   content: attr(data-tip);
   position: absolute;
   z-index: 30;

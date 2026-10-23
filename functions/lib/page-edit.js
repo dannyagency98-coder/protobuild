@@ -176,6 +176,57 @@ export function swapSection(page, fragment, kind) {
   return page.slice(0, local.start) + chunk + page.slice(local.end);
 }
 
+function escapeText(value) {
+  return String(value || '').replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+}
+
+function linkTargets(html) {
+  const zones = ranges(html).filter((item) => item.name === 'header' || item.name === 'nav' || /nav|menu|header/i.test(item.attrs));
+  const zone = zones.sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+  const slice = zone ? html.slice(zone.start, zone.end) : html;
+  const base = zone ? zone.start : 0;
+  const found = [];
+  const re = /<(a|button)\b[^>]*>[\s\S]*?<\/\1>/gi;
+  let match;
+  while ((match = re.exec(slice))) {
+    const text = match[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 40) continue;
+    found.push({ start: base + match.index, end: base + match.index + match[0].length, html: match[0] });
+  }
+  return found;
+}
+
+export function relabelAsked(html, message) {
+  const text = String(message || '');
+  if (!/\b(change|rename|replace|set|update|make)\b/i.test(text)) return '';
+  if (!/\b(nav|menu|links?|buttons?|hero|label|text|heading|title)\b/i.test(text)) return '';
+  const tail = text.split(/\bto\b/i).slice(1).join('to').replace(/[.?!]+$/g, '').trim();
+  if (!tail) return '';
+  const perLink = /\b(nav|menu|links?|buttons?)\b/i.test(text);
+  const labels = perLink
+    ? tail.split(/\s+/).filter((word) => word && !/^and$/i.test(word))
+    : [tail];
+  if (!labels.length) return '';
+  if (!perLink) {
+    const heading = String(html || '').match(/<(h1|h2)\b[^>]*>[\s\S]*?<\/\1>/i);
+    if (!heading) return '';
+    const next = heading[0].replace(/>([^<]{1,160})</, `>${escapeText(labels[0])}<`);
+    if (next === heading[0]) return '';
+    return html.replace(heading[0], next);
+  }
+  const targets = linkTargets(html);
+  if (!targets.length) return '';
+  let next = String(html || '');
+  const count = Math.min(labels.length, targets.length);
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const target = targets[i];
+    const replaced = target.html.replace(/>([^<]{1,80})</, `>${escapeText(labels[i])}<`);
+    if (replaced === target.html) continue;
+    next = next.slice(0, target.start) + replaced + next.slice(target.end);
+  }
+  return next === html ? '' : next;
+}
+
 export function dropAsked(html, message) {
   const text = String(message || '').toLowerCase();
   if (!/\b(remo\w*|hide|delete|close|dismiss|clear|rid)\b/.test(text)) return '';

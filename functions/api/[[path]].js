@@ -3,7 +3,7 @@ import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
-import { absolutizeFragment, asksCookie, dropAsked, dropPhrase, fileLooksHtml, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
+import { absolutizeFragment, asksCookie, dropAsked, dropPhrase, fileLooksHtml, relabelAsked, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
 import { applyReplacements } from '../lib/edit.js';
 import { assertPublicHttpUrl } from '../lib/public-url.js';
 
@@ -310,6 +310,18 @@ async function handleAgent(request, env, user, waitUntil) {
     return sse({ reply: link ? `Live link: ${link}` : 'The live link is off.', job: publicJob(env, next), shareUrl: link });
   }
 
+  if (jobId && /\b(group|organise|organize|sort)\b/i.test(message) && /\b(image|images|picture|pictures|photo|photos|file|files|product)\b/i.test(message)) {
+    const job = await loadJob(env, user.id, jobId);
+    if (!job) return sse({ reply: 'That capture is gone.', job: null });
+    const downloadToo = /\b(download|export|zip|save)\b/i.test(message);
+    return sse({
+      reply: downloadToo ? 'The images are grouped, and the download is starting.' : 'The images are grouped into products, photos, and icons.',
+      job: publicJob(env, job),
+      openGallery: true,
+      action: downloadToo ? 'full' : '',
+    });
+  }
+
   if (jobId && /\b(download|zip|export)\b|\bsave (the|this) (page|file|copy)\b/i.test(message) && !wantsEdit(message)) {
     const job = await loadJob(env, user.id, jobId);
     if (!job) return sse({ reply: 'That capture is gone.', job: null });
@@ -388,6 +400,13 @@ async function handleAgent(request, env, user, waitUntil) {
     }
   }
 
+  const relabeled = relabelAsked(page, message);
+  if (relabeled) {
+    try { await applyChange(env, job, { kind: 'html', html: relabeled }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: 'Updated that text. It is on the phone.', job: await jobForClient(env, job), edited: true });
+  }
+
   const asked = dropAsked(page, message);
   const direct = asked && asked !== page ? asked : '';
   if (direct) {
@@ -418,6 +437,9 @@ async function handleAgent(request, env, user, waitUntil) {
     if (files.length && wantsApplyFile(message)) {
       return sse({ reply: 'I read the file, but those details did not match a line on the page. Name the words to change.', job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
     }
+    if (wantsEdit(message) || asksCookie(message)) {
+      return sse({ reply: 'That did not match the page, so the phone was left as it is.', job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
+    }
     return talkAbout(env, job, history, content, outline, turn.model, turn.quotaReset);
   }
   try {
@@ -428,9 +450,13 @@ async function handleAgent(request, env, user, waitUntil) {
   } catch (err) {
     return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) });
   }
-  const note = String(parsed.note || '').trim();
+  const reply = hidden && !replaced.html
+    ? 'Removed that from the page. It is on the phone.'
+    : replaced.notes?.length
+      ? `${replaced.notes.join(' ')} It is on the phone.`
+      : 'Updated the styling. It is on the phone.';
   return sse({
-    reply: note || 'Updated the page. It is on the phone.',
+    reply,
     job: await jobForClient(env, job),
     edited: true,
     model: turn.model,
