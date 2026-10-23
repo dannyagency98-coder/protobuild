@@ -73,7 +73,7 @@
       </button>
       <label class="search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input id="chatSearch" type="search" placeholder="Search chats" autocomplete="off">
+        <input id="chatSearch" type="search" placeholder="Search conversations" autocomplete="off">
         <button type="button" id="searchClear" hidden aria-label="Clear search">×</button>
       </label>
       <p class="search-count" id="searchCount" hidden></p>
@@ -116,14 +116,14 @@
       </div>
       <div class="hero" id="hero">
         <h1>What do you want to create?</h1>
-        <p class="hero-limits">One page at a time. Scripts are removed. Some sites will fail, and those need an upload.</p>
+        <p class="hero-limits">One page at a time. The layout, styles, and light scripts are kept. Some sites still need an upload.</p>
       </div>
       <div class="stream" id="stream" role="log" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
       <button type="button" class="new-text hidden" id="newText">New text</button>
       <div class="drop-overlay" id="dropOverlay" hidden>Drop the HTML or ZIP to upload it</div>
       <form class="composer" id="composer">
         <div class="ref-row" id="refRow" hidden></div>
-        <textarea id="input" rows="2" placeholder="Paste a link, or ask me to change, download, or share it…"></textarea>
+        <textarea id="input" rows="2" placeholder="Paste a URL, or describe a change to the open page."></textarea>
         <div class="composer-row">
           <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
@@ -140,9 +140,9 @@
         <p class="send-hint">Enter to send · Shift+Enter for a new line</p>
       </form>
       <div class="starters" id="starters">
-        <button type="button" data-prompt="scan example.com"><strong>Scan example.com</strong><span>Open a simple page</span></button>
-        <button type="button" data-prompt="scan xsamplee.pages.dev"><strong>Scan a live site</strong><span>Capture the real layout</span></button>
-        <button type="button" data-prompt="images only https://example.com"><strong>Images only</strong><span>Save the pictures</span></button>
+        <button type="button" data-prompt="scan example.com"><strong>Scan a sample page</strong><span>Open a simple public page</span></button>
+        <button type="button" data-prompt="scan https://www.apple.com"><strong>Scan a live site</strong><span>Capture the page as it appears</span></button>
+        <button type="button" data-prompt="images only https://www.wikipedia.org"><strong>Collect the images</strong><span>Save the pictures from a page</span></button>
       </div>
     </section>
     <button class="split" id="splitStage" type="button" aria-label="Resize chat and phone" data-tip="Drag to resize. Double-click to reset."></button>
@@ -208,7 +208,6 @@
             <div class="status-bar">
               <div class="status-left">
                 <span id="phoneTime">9:41</span>
-                <span id="phoneDate">Fri 23</span>
               </div>
               <div class="island"></div>
               <div class="status-right" aria-hidden="true">
@@ -245,9 +244,10 @@
             <button type="button" data-jump="photo" disabled>Photos</button>
             <button type="button" data-jump="icon" disabled>Icons</button>
           </div>
-          <label class="tiny-toggle"><input type="checkbox" id="tinyImgs"> Show icons and tracking pixels</label>
-          <span id="galleryNote">No capture open</span>
-          <button class="stage-btn" type="button" id="zipImages" disabled><span class="btn-label">Download images</span></button>
+          <input id="gallerySearch" type="search" placeholder="Search images" aria-label="Search images" autocomplete="off">
+          <label class="tiny-toggle"><input type="checkbox" id="tinyImgs"> Include small files</label>
+          <span id="galleryNote">No page open</span>
+          <button class="stage-btn" type="button" id="zipImages" disabled><span class="btn-label">Download all</span></button>
         </div>
         <div class="shot-grid" id="imgGrid"></div>
       </div>
@@ -272,7 +272,9 @@
           <div class="lb-actions">
             <span id="lbDim"></span>
             <span id="lbPos"></span>
-            <button type="button" id="lbDown">Download this image</button>
+            <button type="button" id="lbCopy">Copy link</button>
+            <button type="button" id="lbRef">Use as reference</button>
+            <button type="button" id="lbDown">Download</button>
           </div>
         </figcaption>
       </figure>
@@ -342,7 +344,7 @@
         <h2>Notes</h2>
         <form class="feedback-card" id="feedbackForm">
           <p>Saved on this computer. Nothing is sent anywhere.</p>
-          <textarea id="feedbackText" rows="3" placeholder="What should change?"></textarea>
+          <textarea id="feedbackText" rows="3" placeholder="Describe what should change."></textarea>
           <div class="feedback-actions">
             <button type="button" id="feedbackCancel">Clear</button>
             <button type="submit">Save</button>

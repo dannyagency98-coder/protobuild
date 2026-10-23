@@ -21,7 +21,7 @@ const PICK = '<script data-proto-stay="1">(function(){function foreign(url){try{
 
 const FIT = '<script data-proto-fix="1">(function(){document.body.style.overflow="auto";document.body.style.height="auto";function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}fit();window.addEventListener("load",fit);document.querySelectorAll("video").forEach(function(video){var box=video.getBoundingClientRect();if(box.width<120||box.height<80)return;var still=document.createElement("img");still.src="screenshots/desktop.png";still.alt="";still.style.cssText="width:100%;height:100%;object-fit:cover;object-position:center;display:block";still.addEventListener("error",function(){still.remove()},{once:true});video.replaceWith(still)})})();</script>';
 
-const CSP = "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data: https:; script-src 'self' 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'";
+const CSP = "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: data:; media-src 'self' data: blob: https:; frame-src 'self' https:; frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
 
 export function fileHeaders(file) {
   const ext = String(file).split('.').pop().toLowerCase();
@@ -97,7 +97,10 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
   }
   const custom = await env.R2.head(`sites/${jobId}/custom.css`);
   if (custom && !/custom\.css/i.test(html)) {
-    html = html.replace(/<\/head>/i, '<link rel="stylesheet" href="custom.css"></head>');
+    const href = share && pageUrl
+      ? new URL('custom.css', pageUrl.endsWith('/') ? pageUrl : `${pageUrl}/`).href
+      : `/preview/${jobId}/custom.css`;
+    html = html.replace(/<\/head>/i, `<link rel="stylesheet" href="${href}"></head>`);
   }
   if (share && !html.includes('Reference prototype')) {
     html = html.replace(/<body([^>]*)>/i, '<body$1><div style="position:fixed;top:0;left:0;right:0;background:#111;color:#f3efe4;padding:8px 12px;font:13px/1.4 ui-sans-serif,system-ui;z-index:99999;text-align:center">Reference prototype, not the original website</div>');

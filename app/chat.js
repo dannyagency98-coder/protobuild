@@ -258,8 +258,8 @@ function syncStageActions(job) {
   const box = document.getElementById('input');
   if (box) {
     box.placeholder = ready
-      ? `Change, download, or share ${name}…`
-      : (scanning ? `Scanning ${name}…` : 'Paste a link, or ask me to change, download, or share it…');
+      ? `Describe a change to ${name}.`
+      : (scanning ? `Scanning ${name}.` : 'Paste a URL, or describe a change to the open page.');
   }
 }
 
@@ -361,7 +361,8 @@ function bubble(role, html, opts = {}) {
   if (opts.pending) tools.hidden = true;
   const retryBtn = tools.querySelector('[data-act="retry"]');
   if (role !== 'user') retryBtn.hidden = true;
-  tools.querySelector('[data-act="copy"]').onclick = () => copyText(row.querySelector('.bubble')?.innerText || '');
+  const copyBtn = tools.querySelector('[data-act="copy"]');
+  copyBtn.onclick = () => copyText(row.querySelector('.bubble')?.innerText || '', 'Copied.', copyBtn);
   tools.querySelector('[data-act="edit"]')?.addEventListener('click', () => beginEdit(row));
   retryBtn.onclick = () => resendRow(row);
   row.appendChild(tools);
@@ -982,9 +983,7 @@ function remainLabel(job) {
 function paintClock() {
   const now = new Date();
   const time = document.getElementById('phoneTime');
-  const date = document.getElementById('phoneDate');
   if (time) time.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  if (date) date.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
   const scanning = jobLive(activeJob);
   const clock = document.getElementById('captureClock');
   if (clock) {
@@ -1416,7 +1415,7 @@ async function share(job, days = 7) {
     const field = pop.querySelector('.share-field');
     field?.addEventListener('focus', () => field.select());
     wirePop({
-      copy: async () => { await copyText(link, 'Link copied.'); },
+      copy: async (btn) => { await copyText(link, 'Copied.', btn); },
     });
   } catch (err) {
     toast(err.message);
@@ -1901,6 +1900,7 @@ input.addEventListener('keydown', (e) => {
 let gallery = [];
 let galleryJobId = '';
 let galleryIndex = -1;
+let galleryQuery = '';
 
 function imageSrc(img) {
   if (img.src) return img.src;
@@ -1959,6 +1959,25 @@ function openLightbox(index) {
   document.getElementById('lbNext')?.classList.toggle('hidden', gallery.length < 2);
   const down = document.getElementById('lbDown');
   if (down) down.onclick = () => download(src, `${siteSlug(activeJob)}-${name}`);
+  const copy = document.getElementById('lbCopy');
+  if (copy) copy.onclick = () => copyText(absoluteLink(src), 'Copied.', copy);
+  const ref = document.getElementById('lbRef');
+  if (ref) ref.onclick = () => useGalleryReference(img, name);
+}
+
+async function useGalleryReference(img, name) {
+  if (!activeJob || activeJob.status !== 'done') {
+    toast('Save the page before attaching a reference.');
+    return;
+  }
+  try {
+    const res = await fetch(imageSrc(img));
+    if (!res.ok) throw new Error('That image did not load.');
+    const blob = await res.blob();
+    addReference(new File([blob], name || 'reference.png', { type: blob.type || 'image/png' }));
+  } catch (err) {
+    toast(err.message || 'That image could not be attached.');
+  }
 }
 
 function galleryKind(img) {
@@ -1973,20 +1992,27 @@ function renderGallery(job) {
   const grid = document.getElementById('imgGrid');
   const note = document.getElementById('galleryNote');
   if (!grid) return;
+  const query = galleryQuery;
+  const visible = gallery.filter((img) => {
+    if (!query) return true;
+    const name = String(img.local || img.src || '').toLowerCase();
+    return name.includes(query) || galleryKind(img).includes(query);
+  });
   if (note) {
     const hiddenFiles = Number(job?.gallerySkipped) || 0;
-    const countLabel = gallery.length ? `${gallery.length} image${gallery.length === 1 ? '' : 's'}` : 'No images yet';
-    note.textContent = hiddenFiles ? `${countLabel} · ${hiddenFiles} left out` : countLabel;
+    const countLabel = visible.length ? `${visible.length} image${visible.length === 1 ? '' : 's'}` : 'No images';
+    note.textContent = hiddenFiles ? `${countLabel}. ${hiddenFiles} small files are hidden.` : countLabel;
   }
-  if (!gallery.length) {
+  if (!visible.length) {
     const waiting = job && (job.status === 'queued' || job.status === 'running');
-    grid.innerHTML = `<p class="gallery-empty">${waiting ? 'Images show up when the capture finishes.' : 'No images in this capture.'}</p>`;
+    const empty = query ? 'No images match that search.' : (waiting ? 'Images appear when the scan finishes.' : 'This page has no saved images.');
+    grid.innerHTML = `<p class="gallery-empty">${empty}</p>`;
     document.querySelectorAll('[data-jump]').forEach((btn) => { btn.disabled = true; });
     return;
   }
   const titles = { product: 'Products', photo: 'Photos', icon: 'Icons' };
   grid.innerHTML = ['product', 'photo', 'icon'].map((kind) => {
-    const rows = gallery.map((img, index) => ({ img, index })).filter((row) => galleryKind(row.img) === kind);
+    const rows = visible.map((img) => ({ img, index: gallery.indexOf(img) })).filter((row) => galleryKind(row.img) === kind);
     if (!rows.length) return '';
     const cards = rows.map((row, n) => {
       const src = imageSrc(row.img);
@@ -2037,7 +2063,12 @@ async function loadGallery(job) {
   }
   const tinyBox = document.getElementById('tinyImgs');
   const changedJob = galleryJobId !== job.id;
-  if (changedJob && tinyBox) tinyBox.checked = !!readPrefs().tiny;
+  if (changedJob) {
+    galleryQuery = '';
+    const search = document.getElementById('gallerySearch');
+    if (search) search.value = '';
+    if (tinyBox) tinyBox.checked = !!readPrefs().tiny;
+  }
   const tiny = !!tinyBox?.checked;
   let data = { images: [] };
   try {
@@ -2210,14 +2241,14 @@ function paintStarters() {
   const done = jobs.some((job) => job.status === 'done');
   const items = done
     ? [
-      ['Change the headings', 'On the open page', 'Change the headings'],
-      ['Download the images', 'Save the gallery', 'Download the images'],
-      ['Share this page', 'Copy a view link', 'Share this page'],
+      ['Revise the headings', 'On the open page', 'Change the headings'],
+      ['Download the images', 'From this page', 'Download the images'],
+      ['Share this page', 'Create a view link', 'Share this page'],
     ]
     : [
-      ['Scan example.com', 'Open a simple page', 'scan example.com'],
-      ['Scan a live site', 'Capture the real layout', 'scan https://www.apple.com'],
-      ['Images only', 'Save the pictures', 'images only https://www.wikipedia.org'],
+      ['Scan a sample page', 'A simple public page', 'scan example.com'],
+      ['Scan a live site', 'Capture the page as it appears', 'scan https://www.apple.com'],
+      ['Collect the images', 'Save the pictures from a page', 'images only https://www.wikipedia.org'],
     ];
   const html = items.map(([title, sub, prompt]) => `<button type="button" data-prompt="${esc(prompt)}"><strong>${esc(title)}</strong><span>${esc(sub)}</span></button>`).join('');
   const home = document.getElementById('starters');
@@ -2250,11 +2281,33 @@ function toast(text, opts = {}) {
   if (!opts.error) toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
 }
 
-async function copyText(text, ok = 'Copied.') {
+function flashCopied(button) {
+  if (!button) return;
+  const svg = button.querySelector('svg');
+  button.classList.add('is-copied');
+  if (svg) {
+    const previous = svg.innerHTML;
+    svg.innerHTML = '<path d="M5 12.5 9.2 16.5 19 7"/>';
+    setTimeout(() => {
+      svg.innerHTML = previous;
+      button.classList.remove('is-copied');
+    }, 1200);
+    return;
+  }
+  const previous = button.textContent;
+  button.textContent = 'Copied';
+  setTimeout(() => {
+    button.textContent = previous;
+    button.classList.remove('is-copied');
+  }, 1200);
+}
+
+async function copyText(text, ok = 'Copied.', button) {
   const value = String(text || '').trim();
   if (!value) { toast('Nothing to copy.'); return; }
   try {
     await navigator.clipboard.writeText(value);
+    flashCopied(button);
     toast(ok);
     return;
   } catch { /* fall through */ }
@@ -2268,6 +2321,7 @@ async function copyText(text, ok = 'Copied.') {
     area.select();
     const copied = document.execCommand('copy');
     area.remove();
+    if (copied) flashCopied(button);
     toast(copied ? ok : 'Could not copy that.');
   } catch {
     toast('Could not copy that.');
@@ -2596,7 +2650,7 @@ function openHelp(e) {
 }
 
 function openPlus(e) {
-  showPop(`<h3>Start</h3><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Images only</button><button class="menu-act" type="button" data-go="file">Upload a saved page</button>`, e.currentTarget);
+  showPop(`<h3>New scan</h3><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Upload a saved page</button>`, e.currentTarget);
   const field = document.getElementById('scanUrl');
   document.getElementById('scanUrlForm')?.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -2637,14 +2691,14 @@ function openThread(e) {
   showPop(`<h3>This chat</h3><p class="menu-note">${esc(chatLink())}</p><button class="menu-act" type="button" data-go="fresh">New chat</button><button class="menu-act" type="button" data-go="id">Copy chat link</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="copy" ${activeJob?.status === 'done' ? '' : 'disabled'}>Copy preview link</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share</button><button class="menu-act danger" type="button" data-go="remove" ${activeJob ? '' : 'disabled'}>Remove this capture</button>`, e.currentTarget);
   wirePop({
     fresh: () => { closePop(); document.getElementById('newChat').click(); },
-    id: () => { copyText(chatLink(), 'Chat link copied.'); },
+    id: (btn) => { copyText(chatLink(), 'Copied.', btn); },
     images: () => {
       closePop();
       if (!activeJob) { toast('Open a capture first.'); return; }
       setView('images');
       loadGallery(activeJob);
     },
-    copy: () => { if (activeJob?.previewUrl) copyText(activeJob.previewUrl, 'Preview link copied.'); else toast('The preview is not ready yet.'); },
+    copy: (btn) => { if (activeJob?.previewUrl) copyText(absoluteLink(activeJob.previewUrl), 'Copied.', btn); else toast('The preview is not ready yet.'); },
     share: () => { closePop(); if (activeJob) openShare(activeJob); },
     remove: () => { if (activeJob) removeCapture(activeJob.id); },
   });
@@ -2858,8 +2912,8 @@ document.getElementById('bellBtn').onclick = (e) => {
   });
 };
 document.getElementById('chatMenu').onclick = openThread;
-document.getElementById('chatId')?.addEventListener('click', () => {
-  if (chatId) copyText(chatLink(), 'Chat link copied.');
+document.getElementById('chatId')?.addEventListener('click', (event) => {
+  if (chatId) copyText(chatLink(), 'Copied.', event.currentTarget);
 });
 document.getElementById('threadMenu').onclick = openThread;
 document.getElementById('viewPhone').onclick = () => setView('phone');
@@ -2884,6 +2938,10 @@ document.getElementById('galleryBtn')?.addEventListener('click', () => {
 });
 document.getElementById('tinyImgs').addEventListener('change', () => {
   if (activeJob) loadGallery(activeJob);
+});
+document.getElementById('gallerySearch')?.addEventListener('input', (event) => {
+  galleryQuery = String(event.target.value || '').trim().toLowerCase();
+  if (activeJob) renderGallery(activeJob);
 });
 function needCapture(what) {
   if (!activeJob) {

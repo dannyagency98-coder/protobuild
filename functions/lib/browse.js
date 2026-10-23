@@ -59,10 +59,30 @@ function zipStore(files) {
   return out;
 }
 
-function freezePage(html) {
-  return String(html || '')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+=(?:"[^"]*"|'[^']*')/gi, '');
+const TRACKER = /google-analytics|googletagmanager|gtag\/js|googleadservices|doubleclick|facebook\.net|connect\.facebook|hotjar|segment\.(com|io)|mixpanel|fullstory|clarity\.ms|sentry\.io|newrelic|datadog|cookiebot|onetrust|trustarc|cookielaw|demdex|adservice|scorecardresearch|quantserve|optimizely|bat\.bing|licdn\.com|ads-twitter/i;
+
+function attr(value) {
+  return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function preparePage(html, sourceUrl) {
+  let next = String(html || '').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, (tag) => {
+    const src = (tag.match(/\ssrc=["']([^"']+)["']/i) || [])[1] || '';
+    if ((src && TRACKER.test(src)) || (!src && TRACKER.test(tag))) return '';
+    if (!src && tag.length > 40000) return '';
+    return tag;
+  });
+  next = next.replace(/\son\w+\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '');
+  let baseHref = '';
+  try {
+    const url = new URL(sourceUrl);
+    if (/^https?:$/i.test(url.protocol)) baseHref = url.href;
+  } catch { /* keep the page without a base */ }
+  if (!baseHref) return next;
+  const base = `<base href="${attr(baseHref)}">`;
+  next = next.replace(/<base\b[^>]*>/gi, '');
+  if (/<head[^>]*>/i.test(next)) return next.replace(/<head[^>]*>/i, (open) => `${open}${base}`);
+  return `<head>${base}</head>${next}`;
 }
 
 function screenshotPage() {
@@ -91,7 +111,7 @@ export async function captureInBrowser(env, job) {
     const shot = new Uint8Array(await page.screenshot({ type: 'png' }));
     const raw = await page.content();
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const html = text.length > 80 ? freezePage(raw) : screenshotPage();
+    const html = text.length > 80 ? preparePage(raw, job.source_url) : screenshotPage();
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
     });

@@ -596,7 +596,7 @@ html[data-history="off"] #splitSide {
   color: #8a8a8a;
   margin-bottom: 6px;
 }
-.stage-actions { grid-area: actions; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; }
+.stage-actions { grid-area: actions; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; margin-left: auto; }
 .tab {
   font-size: 0.8rem;
   color: #fff;
@@ -862,6 +862,17 @@ html[data-history="off"] #splitSide {
   font-size: 0.75rem;
 }
 .gallery-tools .stage-btn { margin-left: auto; }
+#gallerySearch {
+  height: 26px;
+  width: 140px;
+  border-radius: 6px;
+  border: 1px solid #2a2a2a;
+  background: #101010;
+  color: inherit;
+  padding: 0 8px;
+  font-size: 0.72rem;
+}
+.mini.is-copied { color: #b7f0c2; }
 .gal-jumps { display: inline-flex; gap: 4px; flex: none; }
 .gal-jumps button {
   height: 26px;
@@ -1073,9 +1084,8 @@ html[data-history="off"] #splitSide {
   color: #fff;
   padding: 4px 16px 0;
 }
-.status-left { display: flex; flex-direction: column; line-height: 1.05; min-width: 0; }
-#phoneTime { font-size: 15px; font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-#phoneDate { font-size: 10px; color: rgba(255, 255, 255, 0.72); margin-top: 2px; }
+.status-left { display: flex; align-items: center; min-width: 0; padding-left: 6px; }
+#phoneTime { font-size: 16px; font-weight: 600; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; line-height: 1; }
 .status-right { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .screen {
   position: relative;
@@ -2107,8 +2117,8 @@ html[data-theme="light"] #phoneView[data-device="phone"] .stage-empty.veil {
 }
 html[data-theme="light"] #phoneView[data-device="phone"] .scan-line { color: #171717; }
 html[data-theme="light"] #phoneView[data-device="phone"] .island { background: #111; }
-html[data-theme="light"] #phoneView .status-bar { color: #111; }
-html[data-theme="light"] #phoneDate { color: #666; }
+html[data-theme="light"] #phoneView .status-bar { color: #000; }
+html[data-theme="light"] #phoneTime { font-weight: 600; }
 html[data-theme="light"] .zoom-switch,
 html[data-theme="light"] .gal-jumps button,
 html[data-theme="light"] .scan-url input { background: #fff; color: #171717; border-color: #e4e4e4; }
@@ -2119,6 +2129,8 @@ html[data-theme="light"] .stage-btn:hover { background: #f6f6f6; }
 html[data-theme="light"] .stage-canvas { background: #f3f3f4; }
 html[data-theme="light"] .gallery-view { background: #f6f6f7; }
 html[data-theme="light"] .gallery-tools { color: #555; border-bottom-color: #ececec; }
+html[data-theme="light"] #gallerySearch { background: #fff; color: #171717; border-color: #e4e4e4; }
+html[data-theme="light"] .mini.is-copied { color: #157a3a; }
 html[data-theme="light"] .shot { background: #fff; border-color: #e6e6e6; }
 html[data-theme="light"] .shot span, html[data-theme="light"] .gallery-empty { color: #666; }
 html[data-theme="light"] .auth-card,

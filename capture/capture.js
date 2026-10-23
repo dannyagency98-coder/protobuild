@@ -1009,7 +1009,7 @@ async function main() {
         }).filter(Boolean).join(', ');
         return next ? `srcset="${next}"` : '';
       });
-      html = html.replace(/<script\b[^>]*\ssrc=["']https?:\/\/[^"']+["'][^>]*>\s*<\/script>/gi, '');
+      html = html.replace(/<script\b[^>]*\ssrc=["']https?:\/\/[^"']+["'][^>]*>\s*<\/script>/gi, (tag) => /google-analytics|googletagmanager|doubleclick|facebook\.net|hotjar|onetrust|cookiebot|clarity\.ms|segment\.com/i.test(tag) ? '' : tag);
       if (renderedCss && renderedCss.length < 1500000) {
         const localCss = rewriteCssUrls(renderedCss, urlToLocal, sourceUrl, 'assets/rendered.css');
         fs.writeFileSync(path.join(ASSETS_DIR, 'rendered.css'), localCss);
