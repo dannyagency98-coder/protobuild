@@ -373,7 +373,24 @@ html[data-history="off"] #splitSide {
 .who { display: none; }
 .bubble { line-height: 1.55; white-space: pre-wrap; font-size: 0.94rem; color: #f2f2f2; }
 .bubble.arrived { animation: arrive 280ms ease; }
-.bubble a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.bubble a {
+  color: #8eb6ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.share-field {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #101010;
+  color: #8eb6ff;
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
 .typing { display: inline-flex; gap: 5px; align-items: center; height: 1.1em; }
 .typing i {
   width: 6px; height: 6px; border-radius: 99px; background: currentColor; opacity: 0.3;
@@ -624,6 +641,7 @@ html[data-history="off"] #splitSide {
 }
 .view-switch button.on .count { background: #111; color: #fff; }
 .stage-extra { display: none !important; }
+.stage-btn.on { background: #fff; color: #111; }
 .stage-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .stage-btn {
   height: 32px;
@@ -2329,7 +2347,7 @@ button:not(:disabled):not(.confirm-backdrop):not(.split):active {
 .bubble a:hover,
 .chat-id:hover,
 .me:hover .me-copy b { color: #fff; }
-.bubble a:hover { text-decoration-thickness: 2px; }
+.bubble a:hover { color: #d6e6ff; text-decoration-thickness: 2px; }
 
 html[data-theme="light"] #rightsNo:hover,
 html[data-theme="light"] .confirm-actions [data-no]:hover,
@@ -2363,6 +2381,10 @@ html[data-theme="light"] .nav-item:hover,
 html[data-theme="light"] .bubble a:hover,
 html[data-theme="light"] .chat-id:hover,
 html[data-theme="light"] .me:hover .me-copy b { color: #111; }
+html[data-theme="light"] .bubble a { color: #1d4ed8; }
+html[data-theme="light"] .bubble a:hover { color: #1e3a8a; }
+html[data-theme="light"] .share-field { background: #fff; color: #1d4ed8; border-color: #e4e4e4; }
+html[data-theme="light"] .stage-btn.on { background: #111; color: #fff; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

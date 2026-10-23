@@ -222,7 +222,8 @@ function syncStageActions(job) {
   const wait = 'Available when the preview finishes.';
   tuneBtn(document.querySelector('#stageBar > .stage-actions [data-open]'), ready && !!job.previewUrl, 'Open', ready ? `Open ${name} in a new tab` : wait);
   tuneBtn(document.querySelector('#stageBar > .stage-actions [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
-  tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Copy a link to ${name}` : wait);
+  tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Share ${name}` : wait);
+  tuneBtn(document.getElementById('galleryBtn'), !!job?.id, 'Gallery', job?.id ? `Images from ${name}` : 'Open a capture to see its images');
   tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
@@ -334,6 +335,13 @@ async function api(path, opts = {}, retry = true) {
 
 function iconBtn(name, label, path) {
   return `<button class="mini" type="button" data-act="${name}" data-tip="${label}" aria-label="${label}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">${path}</svg></button>`;
+}
+
+function linkify(text) {
+  return esc(text).replace(/\n/g, '<br>').replace(/(^|[\s(])((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<)]*)?)/gi, (all, lead, raw) => {
+    const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return `${lead}<a href="${esc(href)}" target="_blank" rel="noopener">${raw}</a>`;
+  });
 }
 
 function bubble(role, html, opts = {}) {
@@ -1025,7 +1033,7 @@ function say(role, text) {
   thread.push({ role, text });
   setWorking(true);
   saveSession();
-  return bubble(role, esc(text).replace(/\n/g, '<br>'));
+  return bubble(role, linkify(text));
 }
 
 function sayTyping() {
@@ -1046,7 +1054,7 @@ function reveal(box, text) {
   if (tools) tools.hidden = false;
   const retry = tools?.querySelector('[data-act="retry"]');
   if (retry) retry.hidden = false;
-  const html = esc(text).replace(/\n/g, '<br>').replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+  const html = linkify(text);
   box.innerHTML = html;
   box.classList.remove('arrived');
   void box.offsetWidth;
@@ -1399,11 +1407,16 @@ async function share(job, days = 7) {
     });
     activeJob = updated;
     syncStageActions(updated);
-    if (days === 'off') { toast('Share link turned off.'); return; }
+    if (days === 'off') { toast('Share link turned off.'); closePop(); return; }
     const link = absoluteLink(updated.shareUrl);
     if (!link) { toast('I could not turn the link on.'); return; }
-    await copyText(link, 'Share link copied.');
-    say('ai', `Live link:\n${link}`);
+    showPop(`<h3>Share</h3><p class="menu-note">Anyone with this link can open the page.</p><input class="share-field" readonly value="${esc(link)}" aria-label="Share link"><button class="menu-act" type="button" data-go="copy">Copy link</button>`, document.getElementById('shareQuick'));
+    pop.style.width = '320px';
+    const field = pop.querySelector('.share-field');
+    field?.addEventListener('focus', () => field.select());
+    wirePop({
+      copy: async () => { await copyText(link, 'Link copied.'); },
+    });
   } catch (err) {
     toast(err.message);
   }
@@ -1652,7 +1665,7 @@ function paint(box, text) {
   if (tools) tools.hidden = false;
   const retry = tools?.querySelector('[data-act="retry"]');
   if (retry) retry.hidden = false;
-  box.innerHTML = esc(text).replace(/\n/g, '<br>').replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+  box.innerHTML = linkify(text);
   stickThread(false);
 }
 
@@ -1805,6 +1818,13 @@ async function onSend(text, images) {
   const trimmed = text.trim();
   if (!trimmed) return;
   if (!rightsOk(trimmed)) return;
+  if (activeJob?.id && /\b(gallery|pictures|photos)\b|\bshow (the |its )?images\b/i.test(trimmed) && !/\bscan\b|https?:\/\//i.test(trimmed)) {
+    say('user', trimmed);
+    say('ai', 'Gallery is open.');
+    setView('images');
+    loadGallery(activeJob);
+    return;
+  }
   if (!/^[a-f0-9]{8}$/.test(chatId)) {
     chatId = newChatId();
     addressMode = 'push';
@@ -1834,7 +1854,7 @@ async function resendTurn(userRow, text) {
   const bubbleEl = userRow.querySelector('.bubble');
   if (bubbleEl) {
     bubbleEl.hidden = false;
-    bubbleEl.innerHTML = esc(trimmed).replace(/\n/g, '<br>');
+    bubbleEl.innerHTML = linkify(trimmed);
   }
   userRow.querySelector('.edit-box')?.remove();
   const tools = userRow.querySelector('.actions-row');
@@ -1899,6 +1919,7 @@ function setView(name) {
   imageBtn?.classList.toggle('on', !onPhone);
   phoneBtn?.setAttribute('aria-selected', onPhone ? 'true' : 'false');
   imageBtn?.setAttribute('aria-selected', onPhone ? 'false' : 'true');
+  document.getElementById('galleryBtn')?.classList.toggle('on', !onPhone);
   if (onPhone) requestAnimationFrame(fitPhone);
 }
 
@@ -2830,6 +2851,13 @@ document.getElementById('viewImages').onclick = () => {
   setView('images');
   loadGallery(activeJob);
 };
+document.getElementById('galleryBtn')?.addEventListener('click', () => {
+  if (!activeJob) { toast('Open a capture to see its images.'); return; }
+  const open = !document.getElementById('galleryView')?.classList.contains('hidden');
+  if (open) { setView('phone'); return; }
+  setView('images');
+  loadGallery(activeJob);
+});
 document.getElementById('tinyImgs').addEventListener('change', () => {
   if (activeJob) loadGallery(activeJob);
 });
