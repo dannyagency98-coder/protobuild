@@ -121,6 +121,8 @@ export async function queueCapture(env, user, body, waitUntil) {
   await rememberJob(env, user.id, created.id);
   if (canBrowser) {
     waitUntil(captureInBrowser(env, created).catch(async () => {
+      const current = await readStoredJob(env, created.id);
+      if (current && (/stopped/i.test(String(current.error || '')) || current.status === 'done' || current.status === 'failed' || current.status === 'blocked')) return;
       const queued = await dispatchGithub(env, created);
       if (queued) {
         await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Previewing the screen' });

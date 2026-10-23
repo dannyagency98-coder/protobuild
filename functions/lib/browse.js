@@ -235,14 +235,17 @@ async function mirrorAssets(env, job, html, urls, extras) {
   const sheetUrls = (extras?.sheets || []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 4);
   let totalCount = Math.max(1, unique.length + fontUrls.length + sheetUrls.length);
   let done = 0;
+  let aborted = false;
   const report = async () => {
+    if (aborted) return;
     done += 1;
-    await saveJob(env, {
+    const ok = await saveJob(env, {
       ...job,
       status: 'running',
       phase: 'saving',
       phaseDetail: `Copying assets ${Math.min(done, totalCount)}/${totalCount}`,
-    }).catch(() => {});
+    }).catch(() => false);
+    if (!ok) aborted = true;
   };
   const pairs = [];
   const images = [];
@@ -250,7 +253,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
   let total = 0;
   let cursor = 0;
   async function pull() {
-    while (cursor < unique.length) {
+    while (cursor < unique.length && !aborted) {
       const index = cursor;
       const url = unique[cursor];
       cursor += 1;
@@ -319,7 +322,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
   let fontCursor = 0;
   const fontPairs = [];
   async function pullFont() {
-    while (fontCursor < fontUrls.length) {
+    while (fontCursor < fontUrls.length && !aborted) {
       const index = fontCursor;
       const url = fontUrls[fontCursor];
       fontCursor += 1;
@@ -358,13 +361,18 @@ async function mirrorAssets(env, job, html, urls, extras) {
     const link = '<link rel="stylesheet" href="assets/captured.css">';
     next = /<head[^>]*>/i.test(next) ? next.replace(/<head[^>]*>/i, (open) => `${open}${link}`) : `<head>${link}</head>${next}`;
   }
-  return { html: next, images, files };
+  return { html: next, images, files, aborted };
 }
 
 async function saveJob(env, job) {
+  const existing = await env.R2.get(`sites/${job.id}/job.json`);
+  const saved = existing ? await existing.json().catch(() => null) : null;
+  if (saved && /stopped/i.test(String(saved.error || ''))) return false;
+  if (saved && (saved.status === 'failed' || saved.status === 'blocked') && job.status !== 'failed' && job.status !== 'blocked') return false;
   await env.R2.put(`sites/${job.id}/job.json`, JSON.stringify(job), {
     httpMetadata: { contentType: 'application/json' },
   });
+  return true;
 }
 
 export async function captureInBrowser(env, job) {
@@ -392,11 +400,15 @@ export async function captureInBrowser(env, job) {
     if (text.length > 80) {
       try {
         const mirrored = await mirrorAssets(env, job, html, urls, extras);
+        if (mirrored.aborted) return;
         html = mirrored.html;
         images = mirrored.images;
         files = mirrored.files;
       } catch { /* keep the page even if an image copy fails */ }
     }
+    const prior = await env.R2.get(`sites/${job.id}/job.json`);
+    const priorJob = prior ? await prior.json().catch(() => null) : null;
+    if (priorJob && /stopped/i.test(String(priorJob.error || ''))) return;
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
     });

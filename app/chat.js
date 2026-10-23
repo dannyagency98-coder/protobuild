@@ -974,10 +974,14 @@ function formatElapsed(from) {
   return `${mins}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-function remainLabel(job) {
+function remainSeconds(job) {
   const start = Date.parse(job?.created_at || '');
   const gone = Number.isFinite(start) ? Math.floor((Date.now() - start) / 1000) : 0;
-  const left = Math.max(0, 45 - gone);
+  return Math.max(0, 45 - gone);
+}
+
+function remainLabel(job) {
+  const left = remainSeconds(job);
   return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
 }
 
@@ -991,10 +995,13 @@ function paintClock() {
     clock.hidden = !scanning;
     clock.textContent = scanning ? remainLabel(activeJob) : '';
   }
+  if (scanning && remainSeconds(activeJob) <= 0) haltScan(activeJob);
 }
 
 let sendToken = 0;
 let inflight = null;
+let pollGen = 0;
+const stoppingIds = new Set();
 
 function setSendMode(on) {
   const btn = document.getElementById('sendBtn');
@@ -1004,30 +1011,69 @@ function setSendMode(on) {
   btn.setAttribute('aria-label', on ? 'Stop' : 'Send');
 }
 
-async function stopRunning() {
+function clearScanPresentation() {
+  stream?.querySelectorAll('.live').forEach((node) => node.remove());
+  stream?.querySelectorAll('.preview-card iframe').forEach((frame) => frame.removeAttribute('src'));
+  document.querySelectorAll('#stage, #phoneView iframe').forEach((frame) => {
+    frame.classList.add('hidden');
+    frame.removeAttribute('src');
+  });
+  const empty = document.getElementById('stageEmpty');
+  if (empty) empty.classList.remove('busy', 'veil', 'hidden');
+  const steps = document.getElementById('captureSteps');
+  if (steps) steps.hidden = true;
+  const clock = document.getElementById('captureClock');
+  if (clock) {
+    clock.hidden = true;
+    clock.textContent = '';
+  }
+  for (const box of stream?.querySelectorAll('.bubble') || []) {
+    if (/previewing the screen/i.test(box.textContent || '')) box.textContent = 'Stopped.';
+  }
+  for (const item of thread) {
+    if (item.role === 'ai' && /previewing the screen/i.test(item.text || '')) item.text = 'Stopped.';
+  }
+}
+
+async function haltScan(job) {
+  if (!job?.id || stoppingIds.has(job.id)) return;
+  if (!jobLive(job) && activeJob?.id === job.id && !jobLive(activeJob)) return;
+  stoppingIds.add(job.id);
+  pollGen += 1;
   sendToken += 1;
   const ctrl = inflight;
   inflight = null;
   try { ctrl?.abort(); } catch {}
+  const stopped = { ...job, status: 'failed', error: 'Stopped.', finished_at: new Date().toISOString() };
+  if (!activeJob || activeJob.id === job.id) activeJob = stopped;
+  clearScanPresentation();
+  showStage(stopped);
+  setSendMode(false);
+  saveSession();
+  refreshJobs();
+  toast('Stopped.');
+  try {
+    const updated = await api('/api/jobs/' + job.id + '/stop', { method: 'POST', body: '{}' });
+    if (activeJob?.id === job.id) {
+      activeJob = updated.status === 'done' ? updated : stopped;
+      showStage(activeJob);
+      if (updated.status === 'done') saveSession();
+    }
+  } catch (err) {
+    toast(err.message || 'Could not stop that.');
+  } finally {
+    stoppingIds.delete(job.id);
+  }
+}
+
+async function stopRunning() {
   const job = activeJob;
   setSendMode(false);
   if (!jobLive(job)) {
     toast('Stopped.');
     return;
   }
-  try {
-    const updated = await api('/api/jobs/' + job.id + '/stop', { method: 'POST', body: '{}' });
-    if (activeJob?.id === job.id) {
-      activeJob = updated;
-      showStage(updated);
-      saveSession();
-    }
-    refreshJobs();
-    toast('Stopped.');
-  } catch (err) {
-    toast(err.message || 'Could not stop that.');
-    setSendMode(jobLive(activeJob));
-  }
+  await haltScan(job);
 }
 
 function say(role, text) {
@@ -1538,12 +1584,17 @@ async function advise(box, job) {
 }
 
 async function poll(id, box) {
+  const mine = ++pollGen;
   const tick = async () => {
-    if (activeJob?.id !== id) return;
+    if (mine !== pollGen || activeJob?.id !== id) return;
     let job;
     try { job = await api('/api/jobs/' + encodeURIComponent(id)); }
     catch { return; }
-    if (activeJob?.id !== id) return;
+    if (mine !== pollGen || activeJob?.id !== id) return;
+    if (jobLive(job) && remainSeconds(job) <= 0) {
+      haltScan(job);
+      return;
+    }
     activeJob = job;
     let status = box.querySelector('[data-status]');
     if (!status) {
@@ -1555,6 +1606,13 @@ async function poll(id, box) {
     status.textContent = jobLive(job) ? '' : statusLine(job);
     renderLive(box, job);
     if (activeJob?.id === id && !inflight) setSendMode(jobLive(job));
+    if (job.status === 'failed' && /stopped/i.test(job.error || '')) {
+      clearScanPresentation();
+      showStage(job);
+      refreshJobs();
+      setSendMode(false);
+      return;
+    }
     if (job.status === 'done') {
       requestLine(box, job);
       maybeChime(job);

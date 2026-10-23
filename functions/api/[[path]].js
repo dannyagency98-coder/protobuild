@@ -638,6 +638,7 @@ async function jobZip(env, user, jobId, type) {
 async function stopJob(env, user, jobId) {
   const job = await loadJob(env, user.id, jobId);
   if (!job) return json({ error: 'Job not found' }, 404);
+  if (job.status === 'done' || /stopped/i.test(String(job.error || ''))) return json(await jobForClient(env, job));
   const stopped = { ...job, status: 'failed', error: 'Stopped.', finished_at: new Date().toISOString() };
   await saveJob(env, stopped);
   await cancelCaptureRun(env, jobId).catch(() => {});

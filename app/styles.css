@@ -67,7 +67,7 @@ input:focus, textarea:focus, input:focus-visible, textarea:focus-visible { outli
 input::placeholder,
 textarea::placeholder {
   font-family: inherit;
-  font-size: 1em;
+  font-size: 13px;
   line-height: inherit;
   opacity: 1;
 }
@@ -512,7 +512,7 @@ html[data-history="off"] #splitSide {
   padding: 4px 6px 8px;
   font-size: 1rem;
 }
-.composer textarea::placeholder { color: var(--muted); font-size: 1rem; }
+.composer textarea::placeholder { color: var(--muted); font-size: 13px; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
 .composer-row .grow { flex: 1; }
 .tool, .chip {
@@ -765,10 +765,10 @@ html[data-history="off"] #splitSide {
 }
 .live .scan-line { justify-content: flex-start; max-width: none; font-size: 0.86rem; }
 .scan-line .spin {
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  border: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
   border-top-color: currentColor;
   animation: auth-spin 0.7s linear infinite;
   flex: none;
@@ -1292,7 +1292,7 @@ html[data-history="off"] #splitSide {
 @keyframes phone-in { from { opacity: 0; } to { opacity: 1; } }
 .stage-empty.busy::after {
   content: "";
-  width: 90px;
+  width: 28px;
   height: 2px;
   border-radius: 99px;
   background: linear-gradient(90deg, transparent, #fff, transparent);
@@ -1408,11 +1408,11 @@ html[data-history="off"] #splitSide {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
   border-radius: 50%;
-  border: 2px solid rgba(17, 17, 17, 0.25);
+  border: 1.5px solid rgba(17, 17, 17, 0.25);
   border-top-color: #111;
   animation: auth-spin 0.7s linear infinite;
 }
@@ -1470,10 +1470,10 @@ html[data-history="off"] #splitSide {
   font-size: 0.92rem;
 }
 .prep-mark {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border: 2px solid #3a3a3a;
+  border: 1.5px solid #3a3a3a;
   flex: none;
 }
 .prep-steps li.on { color: var(--ink); }
@@ -1489,10 +1489,10 @@ html[data-history="off"] #splitSide {
   animation: none;
 }
 .auth-spin {
-  width: 22px;
-  height: 22px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  border: 2px solid #2e2e2e;
+  border: 1.5px solid #2e2e2e;
   border-top-color: #fff;
   animation: auth-spin 0.7s linear infinite;
 }
