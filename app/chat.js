@@ -960,12 +960,6 @@ function formatElapsed(from) {
   return `${mins}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-function stepSeconds(job) {
-  const start = Date.parse(job?.created_at || '');
-  if (!Number.isFinite(start)) return 0;
-  return Math.max(0, Math.floor((Date.now() - start) / 1000));
-}
-
 function paintClock() {
   const clock = jobLive(activeJob) ? formatElapsed(activeJob.created_at) : '';
   const badge = document.getElementById('stageClock');
@@ -973,9 +967,7 @@ function paintClock() {
     badge.hidden = !clock;
     badge.textContent = clock;
   }
-  document.querySelectorAll('.live-clock').forEach((el) => { el.textContent = clock; });
-  const secs = jobLive(activeJob) ? ` · ${stepSeconds(activeJob)}s` : '';
-  document.querySelectorAll('[data-step-sec]').forEach((el) => { el.textContent = secs; });
+  document.querySelectorAll('[data-scan-clock]').forEach((el) => { el.textContent = clock; });
 }
 
 let sendToken = 0;
@@ -1120,16 +1112,6 @@ function previewAddress(job, reload) {
   return parts.length ? base + (base.includes('?') ? '&' : '?') + parts.join('&') : base;
 }
 
-const FRAME_STEPS = ['Queued', 'Opening', 'Scrolling', 'Packaging', 'Done'];
-
-function frameIndex(job) {
-  if (!job || job.status === 'queued') return 0;
-  if (job.status === 'done') return 4;
-  if (job.phase === 'packaging' || job.phase === 'saving') return 3;
-  if (job.phase === 'scrolling' || job.phase === 'reading') return 2;
-  return 1;
-}
-
 function paintStageEmpty(job) {
   const idle = document.getElementById('emptyIdle');
   const steps = document.getElementById('captureSteps');
@@ -1139,20 +1121,10 @@ function paintStageEmpty(job) {
   if (idle) idle.hidden = live || bad;
   if (steps) {
     steps.hidden = !live;
-      if (live) {
-        const lines = Array.isArray(job.log) ? job.log.map((row) => row.detail || row.phase).filter(Boolean).slice(-8) : [];
-        const at = frameIndex(job);
-        const secs = stepSeconds(job);
-        const stepsHtml = FRAME_STEPS.map((label, i) => {
-          const text = i === at && job.phaseDetail ? job.phaseDetail : label;
-          const extra = i === at ? `<span class="step-sec" data-step-sec> · ${secs}s</span>` : '';
-          return `<li class="${i < at ? 'done' : i === at ? 'now' : ''}">${esc(text)}${extra}</li>`;
-        }).join('');
-        const logHtml = lines.length ? `<div class="live-log">${lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>` : '';
-        steps.innerHTML = stepsHtml + logHtml;
-        const log = steps.querySelector('.live-log');
-        if (log) log.scrollTop = log.scrollHeight;
-      }
+    const line = document.getElementById('captureLine');
+    const clock = document.getElementById('captureClock');
+    if (live && line) line.textContent = scanText(job);
+    if (clock) clock.textContent = live ? formatElapsed(job.created_at) : '';
   }
   if (fail) {
     fail.hidden = !bad;
@@ -1242,7 +1214,17 @@ function renderHistory() {
       btn.className = 'h-item' + (data.chatId === chatId ? ' active' : '');
       btn.innerHTML = `<span class="dot ok"></span><span class="h-copy"><span class="h-host">${esc(label)}</span><span class="h-meta">Chat</span></span>`;
       btn.onclick = () => openChat(data.chatId);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'h-x';
+      remove.setAttribute('aria-label', 'Remove chat');
+      remove.textContent = '×';
+      remove.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        dropChat(data.chatId);
+      });
       row.appendChild(btn);
+      row.appendChild(remove);
       historyEl.appendChild(row);
     }
   }
@@ -1314,13 +1296,19 @@ function cleanError(error) {
   return text.split('\n')[0];
 }
 
-const LIVE_STEPS = [
-  ['opening', 'Opening the page'],
-  ['reading', 'Reading layout and images'],
-  ['scrolling', 'Loading the rest of the page'],
-  ['saving', 'Copying styles, fonts, and images'],
-  ['packaging', 'Preparing the preview'],
-];
+function scanText(job) {
+  const host = String(job?.source_url || '').replace(/^https?:\/\//, '').replace(/\/$/, '').split('/')[0] || 'the page';
+  const detail = String(job?.phaseDetail || '').trim().replace(/\s·\s\d+s$/, '');
+  if (job?.status === 'queued' && !detail) return `Starting the browser for ${host}`;
+  if (!detail || /^https?:/i.test(detail)) {
+    if (job?.phase === 'reading') return `Reading ${host}`;
+    if (job?.phase === 'scrolling') return `Loading the rest of ${host}`;
+    if (job?.phase === 'saving') return `Saving ${host}`;
+    if (job?.phase === 'packaging') return 'Preparing the preview';
+    return `Opening ${host}`;
+  }
+  return detail;
+}
 
 function renderLive(box, job) {
   if (!box) return;
@@ -1334,21 +1322,12 @@ function renderLive(box, job) {
     live.className = 'live';
     box.appendChild(live);
   }
-  const names = LIVE_STEPS.map((step) => step[0]);
-  let idx = names.indexOf(job.phase);
-  if (idx < 0) idx = job.status === 'running' ? 1 : 0;
-  const secs = stepSeconds(job);
-  const lines = (Array.isArray(job.log) ? job.log : []).slice(-8);
-  const log = lines.length
-    ? `<div class="live-log">${lines.map((row) => `<div>${esc(row.detail || row.phase || '')}</div>`).join('')}</div>`
-    : '';
-  live.innerHTML = `<div class="live-clock">${formatElapsed(job.created_at)}</div>` + LIVE_STEPS.map((step, i) => {
-    const state = i < idx ? 'done' : i === idx ? 'now' : '';
-    const extra = i === idx ? `<span class="step-sec" data-step-sec> · ${secs}s</span>` : '';
-    return `<div class="live-step ${state}">${step[1]}${extra}</div>`;
-  }).join('') + log;
-  const scroller = live.querySelector('.live-log');
-  if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  let line = live.querySelector('.scan-line span');
+  if (!line) {
+    live.innerHTML = `<p class="scan-line"><i class="spin" aria-hidden="true"></i><span></span><span data-scan-clock>${esc(formatElapsed(job.created_at))}</span></p>`;
+    line = live.querySelector('.scan-line span');
+  }
+  if (line) line.textContent = scanText(job);
 }
 
 function statusLine(job) {
@@ -1356,11 +1335,7 @@ function statusLine(job) {
   if (job.status === 'blocked') return cleanError(job.error) || 'This site blocked the scan. Attach a saved copy of the page.';
   if (job.status === 'failed' && /stopped/i.test(job.error || '')) return 'Stopped.';
   if (job.status === 'failed') return cleanError(job.error) || 'The scan did not finish. Try again, or attach a saved copy of the page.';
-  const step = LIVE_STEPS.find((item) => item[0] === job.phase);
-  const now = step ? step[1] : 'Opening the live page';
-  const count = Number(job.stats?.images || 0);
-  const images = count ? ` · ${count} images saved` : '';
-  return `${now}${images} · ${formatElapsed(job.created_at)}`;
+  return scanText(job);
 }
 
 function wireCard(box, job) {
@@ -1536,7 +1511,7 @@ async function poll(id, box) {
       status.style.marginTop = '8px';
       box.appendChild(status);
     }
-    status.textContent = statusLine(job);
+    status.textContent = jobLive(job) ? '' : statusLine(job);
     renderLive(box, job);
     if (activeJob?.id === id && !inflight) setSendMode(jobLive(job));
     if (job.status === 'done') {
@@ -2350,6 +2325,16 @@ async function removeCapture(id) {
   api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch((err) => toast(err.message));
 }
 
+function dropChat(id) {
+  try {
+    localStorage.removeItem(sessionStoreKey(id));
+    if (localStorage.getItem(sessionPointerKey()) === id) localStorage.removeItem(sessionPointerKey());
+  } catch { /* already gone */ }
+  if (chatId === id) resetChat();
+  else renderHistory();
+  toast('Chat removed.');
+}
+
 async function clearHistory() {
   jobs = [];
   try {
@@ -2379,8 +2364,12 @@ async function clearOpenChat() {
     if (chatId) localStorage.removeItem(sessionStoreKey(chatId));
     localStorage.removeItem(sessionPointerKey());
   } catch {}
+  const gone = chatId;
   resetChat();
-  await refreshJobs();
+  if (gone) {
+    try { localStorage.removeItem(sessionStoreKey(gone)); } catch { /* already gone */ }
+  }
+  renderHistory();
   toast('Chat cleared.');
 }
 
