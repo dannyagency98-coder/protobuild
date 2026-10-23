@@ -2514,7 +2514,9 @@ function showSettingsPanel(name) {
 function paintAccountPage() {
   const email = readAuth()?.email || 'This computer';
   const label = document.getElementById('accountPageEmail');
-  if (label) label.textContent = email;
+  const line = document.getElementById('accountEmail');
+  if (label) label.textContent = email ? 'Signed in as this email.' : 'Not signed in';
+  if (line) line.textContent = email;
   const images = document.getElementById('acctImages');
   if (images) images.disabled = !activeJob;
 }
@@ -2791,6 +2793,7 @@ document.getElementById('settingsTheme')?.addEventListener('click', onThemeClick
 document.getElementById('accountTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('acctSettings').onclick = () => showSettingsPanel('interface');
 document.getElementById('acctUpload').onclick = () => document.getElementById('file').click();
+document.getElementById('captureUpload')?.addEventListener('click', () => document.getElementById('file').click());
 document.getElementById('acctWidths').onclick = () => document.getElementById('prefResetWidths').click();
 document.getElementById('acctImages').onclick = () => {
   if (!activeJob) { toast('Open a capture first.'); return; }

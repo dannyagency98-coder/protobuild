@@ -42,6 +42,12 @@
   </script>
 </head>
 <body>
+  <div class="desktop-only" id="desktopOnly">
+    <div>
+      <h1>Open this on a computer</h1>
+      <p>Protobuild is a desktop workspace. The phone in the preview is the page you scanned, not a phone app.</p>
+    </div>
+  </div>
   <div class="app">
     <header class="mobile-bar">
       <button type="button" id="menuBtn" aria-label="Open menu">
@@ -306,50 +312,12 @@
       <section class="set-panel hidden" id="panel-account">
         <h1>Account</h1>
         <p class="set-lead">This sign-in stays on this computer.</p>
-        <div class="acct-page">
-          <span class="ava" aria-hidden="true"></span>
-          <div>
-            <strong id="accountPageEmail">Signed in</strong>
-            <p>Signed in</p>
-          </div>
-        </div>
-        <div class="set-card">
-          <button class="set-row set-nav" type="button" id="acctSettings"><span><strong>Settings</strong><p>Theme, sound, and history.</p></span></button>
-          <button class="set-row set-nav" type="button" id="acctUpload"><span><strong>Upload a page</strong><p>HTML or ZIP.</p></span></button>
-          <div class="set-row theme-row">
-            <div><strong>Theme</strong></div>
-            <div class="theme-seg" id="accountTheme" role="group" aria-label="Theme">
-              <button type="button" data-theme="system" aria-label="System theme">Auto</button>
-              <button type="button" data-theme="light" aria-label="Light theme">Light</button>
-              <button type="button" data-theme="dark" aria-label="Dark theme">Dark</button>
-            </div>
-          </div>
-          <button class="set-row set-nav" type="button" id="acctSignOut"><span><strong>Sign out</strong></span></button>
-          <button class="set-row set-nav" type="button" id="acctWidths" hidden><span><strong>Reset column widths</strong></span></button>
-          <button class="set-row set-nav" type="button" id="acctImages" hidden><span><strong>Show images</strong></span></button>
-        </div>
-        <h2>Help</h2>
-        <p class="set-lead">A scan opens in the phone. Open puts that page in a new tab.</p>
-        <h2>Feedback</h2>
-        <form class="feedback-card account-notes" id="feedbackForm">
-          <p>Saved on this computer. Nothing is sent anywhere.</p>
-          <textarea id="feedbackText" rows="2" placeholder="What should change?"></textarea>
-          <div class="feedback-actions">
-            <button type="button" id="feedbackCancel">Clear</button>
-            <button type="submit">Save</button>
-          </div>
-          <p id="feedbackEmpty">No notes yet</p>
-          <ul id="feedbackList"></ul>
-        </form>
-      </section>
-      <section class="set-panel" id="panel-interface">
-        <h1>Interface</h1>
-        <p class="set-lead">These stay on this computer.</p>
-        <h2>Account</h2>
         <div class="set-card">
           <div class="set-row">
-            <div><strong id="accountEmail">Signed in</strong><p>Email and password only. Signing out closes this session.</p></div>
-            <button class="set-action" type="button" id="prefSignOut">Sign out</button>
+            <div>
+              <strong id="accountEmail">Signed in</strong>
+              <p id="accountPageEmail">Email and password only.</p>
+            </div>
           </div>
           <div class="set-row">
             <div><strong>Password</strong><p>Change the password for this email.</p></div>
@@ -365,7 +333,38 @@
               <button type="submit">Save</button>
             </div>
           </form>
+          <div class="set-row">
+            <div><strong>Sign out</strong><p>Closes this session on this computer.</p></div>
+            <button class="set-action" type="button" id="prefSignOut">Sign out</button>
+          </div>
         </div>
+        <h2>Notes</h2>
+        <form class="feedback-card" id="feedbackForm">
+          <p>Saved on this computer. Nothing is sent anywhere.</p>
+          <textarea id="feedbackText" rows="3" placeholder="What should change?"></textarea>
+          <div class="feedback-actions">
+            <button type="button" id="feedbackCancel">Clear</button>
+            <button type="submit">Save</button>
+          </div>
+          <p id="feedbackEmpty">No notes yet</p>
+          <ul id="feedbackList"></ul>
+        </form>
+        <div hidden>
+          <button type="button" id="acctSettings"></button>
+          <button type="button" id="acctUpload"></button>
+          <button type="button" id="acctSignOut"></button>
+          <button type="button" id="acctWidths"></button>
+          <button type="button" id="acctImages"></button>
+          <div id="accountTheme">
+            <button type="button" data-theme="system"></button>
+            <button type="button" data-theme="light"></button>
+            <button type="button" data-theme="dark"></button>
+          </div>
+        </div>
+      </section>
+      <section class="set-panel" id="panel-interface">
+        <h1>Interface</h1>
+        <p class="set-lead">These stay on this computer.</p>
         <h2>General</h2>
         <div class="set-card">
           <div class="set-row">
@@ -400,6 +399,10 @@
         <h1>Capture</h1>
         <p class="set-lead">Gallery files and the width of the columns.</p>
         <div class="set-card">
+          <div class="set-row">
+            <div><strong>Upload a page</strong><p>HTML or ZIP, when a scan cannot open the site.</p></div>
+            <button class="set-action" type="button" id="captureUpload">Upload</button>
+          </div>
           <div class="set-row">
             <div><strong>Icons and tracking pixels</strong><p>Show the tiny files the gallery leaves out until you ask for them.</p></div>
             <button class="switch" type="button" id="prefTiny" role="switch" aria-checked="false"></button>
