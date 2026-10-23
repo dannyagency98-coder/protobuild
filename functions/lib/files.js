@@ -1,3 +1,5 @@
+import { pinLocalAssets } from './assets.js';
+
 const TYPES = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
@@ -95,11 +97,10 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
       ? html.replace(/<head[^>]*>/i, (open) => `${open}${PICK}`)
       : `<head>${PICK}</head>${html}`;
   }
+  const assetRoot = folderUrl(pageUrl);
   const custom = await env.R2.head(`sites/${jobId}/custom.css`);
   if (custom && !/custom\.css/i.test(html)) {
-    const href = share && pageUrl
-      ? new URL('custom.css', pageUrl.endsWith('/') ? pageUrl : `${pageUrl}/`).href
-      : `/preview/${jobId}/custom.css`;
+    const href = assetRoot ? new URL('custom.css', assetRoot).href : `/preview/${jobId}/custom.css`;
     html = html.replace(/<\/head>/i, `<link rel="stylesheet" href="${href}"></head>`);
   }
   if (share && !html.includes('Reference prototype')) {
@@ -119,5 +120,17 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
     const end = html.toLowerCase().lastIndexOf('</body>');
     html = end >= 0 ? html.slice(0, end) + FIT + html.slice(end) : html + FIT;
   }
+  if (assetRoot) html = pinLocalAssets(html, assetRoot);
   return new Response(html, { headers });
+}
+
+function folderUrl(pageUrl) {
+  if (!pageUrl) return '';
+  try {
+    const url = new URL(pageUrl);
+    if (!url.pathname.endsWith('/')) url.pathname = url.pathname.replace(/[^/]*$/, '');
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch { return ''; }
 }

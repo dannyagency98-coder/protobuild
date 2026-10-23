@@ -224,7 +224,7 @@ function syncStageActions(job) {
   tuneBtn(document.querySelector('#stageBar > .stage-actions [data-zip]'), ready, 'Download', ready ? `Download ${file}` : wait);
   tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Share ${name}` : wait);
   tuneBtn(document.getElementById('galleryBtn'), !!job?.id, 'Gallery', job?.id ? `Images from ${name}` : 'Open a capture to see its images');
-  tuneBtn(document.getElementById('clipBtn'), ready, '', ready ? 'Attach an image reference for this page' : 'Available after a page is saved');
+  tuneBtn(document.getElementById('clipBtn'), true, '', 'Attach an image, page, or document');
   tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
@@ -258,8 +258,8 @@ function syncStageActions(job) {
   const box = document.getElementById('input');
   if (box) {
     box.placeholder = ready
-      ? `Describe a change to ${name}.`
-      : (scanning ? `Scanning ${name}.` : 'Paste a URL, or describe a change to the open page.');
+      ? `Say what to change on ${name}.`
+      : (scanning ? `Scanning ${name}.` : 'Paste a URL, attach a file, or say what to change.');
   }
 }
 
@@ -1726,14 +1726,24 @@ async function readEvents(res, onEvent) {
   }
 }
 
-async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
-  screenMode = activeJob?.status === 'done' && /\b(change|edit|restyle|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b/i.test(trimmed) ? 'edit' : '';
+async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments }) {
+  const items = attachments || [];
+  const editing = activeJob?.status === 'done' && (
+    /\b(change|edit|restyle|recolou?r|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(trimmed)
+    || (/\b(detail|details|text|price|prices|content)\b/i.test(trimmed) && /\b(file|document|this|these)\b/i.test(trimmed) && /\b(swap|replace|use|take|apply|put|add|bring)\b/i.test(trimmed))
+  );
+  screenMode = editing ? 'edit' : '';
   if (activeJob) showStage(activeJob);
   try {
     const res = await agentFetch({
       message: trimmed,
       history,
-      images: (images || refs).slice(0, 2).map((item) => item.url || item),
+      images: items.filter((item) => !item.kind || item.kind === 'image').slice(0, 2).map((item) => item.url || item),
+      files: items.filter((item) => item.kind && item.kind !== 'image').slice(0, 3).map((item) => ({
+        name: item.name,
+        kind: item.kind,
+        text: String(item.text || '').slice(0, 12000),
+      })),
       activeJobId: activeJob?.id || null,
       rights_confirmed: true,
     }, ctrl.signal);
@@ -1764,6 +1774,23 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
       if (failed) throw new Error(failed);
     }
     if (!data) throw new Error('The chat did not answer.');
+    if (data.upload) {
+      const zip = items.find((item) => item.kind === 'zip' && item.file);
+      if (!zip) throw new Error('Attach the ZIP again, then ask to put it on the preview.');
+      reveal(box, data.reply || 'Opening that file on the phone.');
+      const fd = new FormData();
+      fd.append('file', zip.file, zip.file.name);
+      fd.append('rights_confirmed', 'true');
+      const job = await api('/api/upload', { method: 'POST', body: fd });
+      if (token !== sendToken) return;
+      activeJob = job;
+      await refreshJobs();
+      showStage(job);
+      setSendMode(jobLive(job));
+      poll(job.id, box);
+      saveSession();
+      return;
+    }
     if (token !== sendToken) {
       if (jobLive(data.job)) await api('/api/jobs/' + data.job.id + '/stop', { method: 'POST', body: '{}' }).catch(() => {});
       return;
@@ -1814,8 +1841,9 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
   }
 }
 
-async function onSend(text, images) {
+async function onSend(text, attachments) {
   const trimmed = text.trim();
+  const items = attachments || [];
   if (!trimmed) return;
   if (!rightsOk(trimmed)) return;
   if (activeJob?.id && /\b(gallery|pictures|photos)\b|\bshow (the |its )?images\b/i.test(trimmed) && !/\bscan\b|https?:\/\//i.test(trimmed)) {
@@ -1829,15 +1857,15 @@ async function onSend(text, images) {
     chatId = newChatId();
     addressMode = 'push';
   }
-  const shots = (images || refs).slice(0, 2);
   const history = thread.slice(-20).map((item) => ({ role: item.role, text: item.text }));
   const token = ++sendToken;
   setSendMode(true);
-  const sent = say('user', shots.length ? `${trimmed}\n${shots.length} reference image${shots.length === 1 ? '' : 's'}` : trimmed);
+  const names = items.map((item) => item.name).filter(Boolean);
+  const sent = say('user', names.length ? `${trimmed}\n${names.join(', ')}` : trimmed);
   const box = sayTyping();
   const ctrl = new AbortController();
   inflight = ctrl;
-  await runAgent({ token, trimmed, history, box, sent, ctrl, images: shots });
+  await runAgent({ token, trimmed, history, box, sent, ctrl, attachments: items });
 }
 
 async function resendTurn(userRow, text) {
@@ -1877,16 +1905,16 @@ document.getElementById('composer').addEventListener('submit', (e) => {
     return;
   }
   const text = input.value;
-  if (!text.trim() && !refs.length) {
-    toast('Type a message or paste a link first.');
+  if (!text.trim()) {
+    toast(refs.length ? 'Say what to do with that file.' : 'Type a message or paste a link first.');
     input.focus();
     return;
   }
   input.value = '';
   input.style.height = '';
-  const outgoing = text.trim() || 'Use the attached image as a reference.';
-  const shots = refs.slice(0, 2);
-  onSend(outgoing, shots);
+  const outgoing = text.trim();
+  const held = refs.slice();
+  onSend(outgoing, held);
   refs.splice(0, refs.length);
   paintRefs();
 });
@@ -2710,17 +2738,11 @@ function pickFile(mode) {
   if (!input) return;
   input.dataset.mode = mode;
   input.accept = mode === 'ref'
-    ? 'image/png,image/jpeg,image/webp,image/gif'
+    ? 'image/png,image/jpeg,image/webp,image/gif,.html,.htm,.zip,.txt,.md,.csv,.json,.pdf,text/plain,text/html,application/pdf'
     : '.html,.htm,.zip,text/html';
   input.click();
 }
-document.getElementById('clipBtn').onclick = () => {
-  if (!activeJob || activeJob.status !== 'done') {
-    toast('Attach a reference after a page is saved.');
-    return;
-  }
-  pickFile('ref');
-};
+document.getElementById('clipBtn').onclick = () => pickFile('ref');
 document.getElementById('stageUpload')?.addEventListener('click', () => pickFile('page'));
 const refs = [];
 
@@ -2728,7 +2750,12 @@ function paintRefs() {
   const row = document.getElementById('refRow');
   if (!row) return;
   row.hidden = refs.length === 0;
-  row.innerHTML = refs.map((item, index) => `<div class="ref-chip"><img src="${item.url}" alt=""><button type="button" data-ref="${index}" aria-label="Remove ${esc(item.name)}">×</button></div>`).join('');
+  row.innerHTML = refs.map((item, index) => {
+    const body = item.kind === 'image'
+      ? `<img src="${item.url}" alt="">`
+      : `<span>${esc(item.name)}</span>`;
+    return `<div class="ref-chip${item.kind === 'image' ? '' : ' file'}">${body}<button type="button" data-ref="${index}" aria-label="Remove ${esc(item.name)}">×</button></div>`;
+  }).join('');
   row.querySelectorAll('[data-ref]').forEach((btn) => {
     btn.onclick = () => {
       refs.splice(Number(btn.dataset.ref), 1);
@@ -2737,25 +2764,59 @@ function paintRefs() {
   });
 }
 
-function addReference(file) {
+async function readableFile(file) {
+  const name = file.name || '';
+  if (/\.pdf$/i.test(name) || file.type === 'application/pdf') {
+    const raw = new TextDecoder('latin1').decode(await file.arrayBuffer());
+    const parts = [];
+    const re = /\(((?:\\[0-7]{1,3}|\\.|[^\\)]){2,200})\)/g;
+    let match;
+    while ((match = re.exec(raw)) && parts.join(' ').length < 12000) {
+      const text = match[1]
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '')
+        .replace(/\\t/g, ' ')
+        .replace(/\\([()\\])/g, '$1')
+        .replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
+      if (/[A-Za-z]{3,}/.test(text)) parts.push(text);
+    }
+    return parts.join(' ').replace(/[^\S\n]+/g, ' ').trim().slice(0, 12000);
+  }
+  return (await file.text()).slice(0, 12000);
+}
+
+async function addReference(file) {
   if (!file) return;
-  if (!activeJob || activeJob.status !== 'done') {
-    toast('Attach a reference after a page is saved.');
+  if (refs.length >= 3) { toast('Three files at a time.'); return; }
+  const name = file.name || 'file';
+  const image = /^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(name);
+  if (image) {
+    if (file.size > 1500000) { toast('That image is over 1.5 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      refs.push({ kind: 'image', name, url: String(reader.result || '') });
+      paintRefs();
+    };
+    reader.readAsDataURL(file);
     return;
   }
-  const image = /^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif)$/i.test(file.name || '');
-  if (!image) {
-    toast('Attach an image. A saved HTML or ZIP page goes in Capture.');
-    return;
-  }
-  if (refs.length >= 2) { toast('Two reference images at a time.'); return; }
-  if (file.size > 1500000) { toast('That image is over 1.5 MB.'); return; }
-  const reader = new FileReader();
-  reader.onload = () => {
-    refs.push({ name: file.name || 'image', url: String(reader.result || '') });
+  if (/\.zip$/i.test(name)) {
+    if (file.size > 8000000) { toast('That ZIP is over 8 MB.'); return; }
+    refs.push({ kind: 'zip', name, file, text: '' });
     paintRefs();
-  };
-  reader.readAsDataURL(file);
+    return;
+  }
+  const html = /\.html?$/i.test(name);
+  const doc = html || /\.(txt|md|csv|json)$/i.test(name) || /\.pdf$/i.test(name) || /text\/|json|pdf/i.test(file.type || '');
+  if (!doc) {
+    toast('Use an image, HTML, ZIP, text, or PDF file.');
+    return;
+  }
+  if (file.size > 1500000) { toast('That file is over 1.5 MB.'); return; }
+  const text = await readableFile(file);
+  if (/\.pdf$/i.test(name) && !text) toast('That PDF had no readable text. A text file works better.');
+  refs.push({ kind: html ? 'html' : 'doc', name, text });
+  paintRefs();
 }
 
 document.getElementById('file').onchange = (e) => {

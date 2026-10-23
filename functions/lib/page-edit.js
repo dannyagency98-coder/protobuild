@@ -89,6 +89,25 @@ export function wantsBorrow(message) {
     && /\b(header|nav|menu|navigation|footer|hero|banner|button|section|component)\b/i.test(String(message || ''));
 }
 
+export function wantsPreviewFile(message) {
+  const text = String(message || '');
+  if (/\b(detail|details|text|copy|price|prices|content|words|info|information|heading|title)\b/i.test(text)
+    && /\b(on|onto|into) (the |this )?(site|page|screen|preview)\b/i.test(text)) return false;
+  return /\b(put|place|open|show|preview|display|load|add)\b[^.?\n]{0,48}\b(file|files|page|html|zip|website|document)\b[^.?\n]{0,48}\b(preview|phone|screen)\b/i.test(text)
+    || /\b(use|make) (this |the |these )?(file|files|page|html|website) (as|for) (the )?(preview|phone|screen)\b/i.test(text);
+}
+
+export function wantsApplyFile(message) {
+  const text = String(message || '');
+  return /\b(swap|replace|use|take|copy|apply|put|add|bring)\b/i.test(text)
+    && /\b(detail|details|text|copy|price|prices|content|words|info|information|heading|title|name)\b/i.test(text)
+    && /\b(file|files|document|documents|doc|attachment|this|these)\b/i.test(text);
+}
+
+export function fileLooksHtml(text) {
+  return /<(?:html|body|header|main|section|div|img)\b/i.test(String(text || ''));
+}
+
 function takeSection(html, kind) {
   const test = SECTION[kind] || SECTION.header;
   const hits = ranges(html).filter((item) => {

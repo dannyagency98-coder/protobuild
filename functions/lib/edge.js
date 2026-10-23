@@ -139,6 +139,38 @@ export async function queueCapture(env, user, body, waitUntil) {
   return json({ ...created, status: 'queued' });
 }
 
+export async function storeHtmlPage(env, user, name, html) {
+  if (!env.R2) {
+    const error = new Error('R2 is not connected, so this deploy cannot store a capture.');
+    error.status = 503;
+    throw error;
+  }
+  const id = crypto.randomUUID();
+  const created = {
+    id,
+    user_id: user.id,
+    source_url: String(name || 'page.html').slice(0, 180),
+    mode: 'upload',
+    options: {},
+    status: 'done',
+    phase: 'packaging',
+    phaseDetail: 'Previewing the screen',
+    error: null,
+    stats: {},
+    share_token: null,
+    share_expires_at: null,
+    rights_confirmed: true,
+    created_at: new Date().toISOString(),
+    finished_at: new Date().toISOString(),
+  };
+  await env.R2.put(`sites/${id}/index.html`, String(html || ''), {
+    httpMetadata: { contentType: 'text/html; charset=utf-8' },
+  });
+  await putJob(env, created);
+  await rememberJob(env, user.id, id);
+  return created;
+}
+
 export async function queueUpload(env, user, file) {
   if (!env.R2) return json({ error: 'R2 is not connected, so this deploy cannot store a capture.' }, 503);
   const name = String(file.name || 'upload.html');

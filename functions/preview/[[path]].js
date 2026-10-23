@@ -14,5 +14,8 @@ export async function onRequest(context) {
   const { request, env } = context;
   const found = safeKey(new URL(request.url).pathname);
   if (!found) return new Response('Not found', { status: 404 });
-  return serveStored(env, found.jobId, found.file, { share: false });
+  const pageUrl = new URL(request.url);
+  pageUrl.search = '';
+  pageUrl.hash = '';
+  return serveStored(env, found.jobId, found.file, { share: false, pageUrl: pageUrl.href });
 }

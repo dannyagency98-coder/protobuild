@@ -1,4 +1,5 @@
 import puppeteer from '@cloudflare/puppeteer';
+import { imageFile, rewriteMirrored } from './assets.js';
 
 const PHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
@@ -89,6 +90,122 @@ function screenshotPage() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#fff}img{width:100%;height:auto;display:block}</style></head><body><img src="screenshots/phone.png" alt=""></body></html>`;
 }
 
+async function settleImages(page) {
+  return page.evaluate(async () => {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    for (let i = 0; i < 3; i += 1) {
+      window.scrollBy(0, window.innerHeight * 0.9);
+      await wait(180);
+    }
+    window.scrollTo(0, 0);
+    const pick = (srcset) => {
+      let best = '';
+      let gap = Infinity;
+      for (const part of String(srcset || '').split(',')) {
+        const bits = part.trim().split(/\s+/);
+        const url = bits[0];
+        const width = parseInt(String(bits[1] || '').replace(/\D/g, ''), 10) || 0;
+        if (!url) continue;
+        const next = width ? Math.abs(width - 800) : 500;
+        if (next < gap) { gap = next; best = url; }
+      }
+      return best;
+    };
+    const abs = (value) => {
+      if (!value || /^(data:|blob:|javascript:)/i.test(value)) return '';
+      try { return new URL(value, location.href).href; } catch { return ''; }
+    };
+    const found = [];
+    const push = (value) => {
+      const full = abs(value);
+      if (full && /^https?:/i.test(full)) found.push(full);
+    };
+    document.querySelectorAll('img').forEach((img) => {
+      const source = img.parentElement && img.parentElement.querySelector ? img.parentElement.querySelector('source[srcset]') : null;
+      const chosen = abs(pick(img.getAttribute('srcset') || ''))
+        || abs(source && pick(source.getAttribute('srcset') || ''))
+        || abs(img.currentSrc)
+        || abs(img.getAttribute('data-src'))
+        || abs(img.getAttribute('data-lazy-src'))
+        || abs(img.getAttribute('data-original'))
+        || abs(img.getAttribute('data-lazy'))
+        || abs(img.getAttribute('src'));
+      if (chosen) {
+        img.setAttribute('src', chosen);
+        push(chosen);
+      }
+      img.removeAttribute('srcset');
+      img.setAttribute('loading', 'eager');
+    });
+    document.querySelectorAll('source').forEach((el) => el.removeAttribute('srcset'));
+    document.querySelectorAll('[style*="url"]').forEach((el) => {
+      const style = el.getAttribute('style') || '';
+      const next = style.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (all, quote, val) => {
+        const full = abs(val);
+        if (!full) return all;
+        push(full);
+        return `url("${full}")`;
+      });
+      if (next !== style) el.setAttribute('style', next);
+    });
+    return [...new Set(found)].slice(0, 24);
+  }).catch(() => []);
+}
+
+async function mirrorAssets(env, jobId, html, urls, referer) {
+  const unique = [];
+  const seen = new Set();
+  for (const url of urls || []) {
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    unique.push(url);
+    if (unique.length >= 12) break;
+  }
+  const pairs = [];
+  const images = [];
+  const files = [];
+  let total = 0;
+  let cursor = 0;
+  async function pull() {
+    while (cursor < unique.length) {
+      const index = cursor;
+      const url = unique[cursor];
+      cursor += 1;
+      try {
+        const res = await fetch(url, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(6000),
+          headers: {
+            'User-Agent': PHONE_UA,
+            Referer: referer || url,
+            Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
+          },
+        });
+        if (!res.ok) continue;
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const kind = imageFile(buf, res.headers.get('content-type') || '');
+        if (!kind || buf.length < 40 || buf.length > 900000) continue;
+        if (total + buf.length > 6000000) return;
+        total += buf.length;
+        const name = `assets/img-${index}${kind.ext}`;
+        await env.R2.put(`sites/${jobId}/${name}`, buf, { httpMetadata: { contentType: kind.type } });
+        pairs.push({ from: url, to: name });
+        files.push({ name, data: buf });
+        images.push({
+          url,
+          local: name,
+          size: buf.length,
+          contentType: kind.type,
+          kind: buf.length < 8000 ? 'icon' : 'photo',
+          small: buf.length < 8000,
+        });
+      } catch { /* one image can fail */ }
+    }
+  }
+  await Promise.all([pull(), pull(), pull(), pull()]);
+  return { html: rewriteMirrored(html, pairs), images, files };
+}
+
 async function saveJob(env, job) {
   await env.R2.put(`sites/${job.id}/job.json`, JSON.stringify(job), {
     httpMetadata: { contentType: 'application/json' },
@@ -108,19 +225,37 @@ export async function captureInBrowser(env, job) {
       else window.addEventListener('load', () => setTimeout(done, 600), { once: true });
       setTimeout(done, 4000);
     })).catch(() => {});
+    const urls = await settleImages(page);
     const shot = new Uint8Array(await page.screenshot({ type: 'png' }));
     const raw = await page.content();
+    await browser.close();
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const html = text.length > 80 ? preparePage(raw, job.source_url) : screenshotPage();
+    let html = text.length > 80 ? preparePage(raw, job.source_url) : screenshotPage();
+    let images = [];
+    let files = [];
+    if (text.length > 80) {
+      try {
+        const mirrored = await mirrorAssets(env, job.id, html, urls, job.source_url);
+        html = mirrored.html;
+        images = mirrored.images;
+        files = mirrored.files;
+      } catch { /* keep the page even if an image copy fails */ }
+    }
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
     });
     await env.R2.put(`sites/${job.id}/index.html`, html, {
       httpMetadata: { contentType: 'text/html; charset=utf-8' },
     });
+    if (images.length) {
+      await env.R2.put(`sites/${job.id}/manifest.json`, JSON.stringify({ images, totalMB: Math.round(images.reduce((sum, img) => sum + img.size, 0) / 1048576 * 100) / 100 }), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+    }
     const zip = zipStore([
       { name: 'index.html', data: new TextEncoder().encode(html) },
       { name: 'screenshots/phone.png', data: shot },
+      ...files,
     ]);
     await env.R2.put(`sites/${job.id}/full.zip`, zip, {
       httpMetadata: { contentType: 'application/zip' },
@@ -132,9 +267,10 @@ export async function captureInBrowser(env, job) {
       phaseDetail: 'Previewing the screen',
       error: null,
       finished_at: new Date().toISOString(),
-      stats: { images: shot.length ? 1 : 0 },
+      stats: { images: images.length || (shot.length ? 1 : 0) },
     });
+    return;
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
   }
 }

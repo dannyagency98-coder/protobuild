@@ -116,11 +116,11 @@
       </div>
       <div class="hero" id="hero">
         <h1>What do you want to create?</h1>
-        <p class="hero-limits">One page at a time. The layout, styles, and light scripts are kept. Some sites still need an upload.</p>
+        <p class="hero-limits">Attach a file or scan a page, then say what to do with it. Nothing changes until the prompt asks.</p>
       </div>
       <div class="stream" id="stream" role="log" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
       <button type="button" class="new-text hidden" id="newText">New text</button>
-      <div class="drop-overlay" id="dropOverlay" hidden>Drop the HTML or ZIP to upload it</div>
+      <div class="drop-overlay" id="dropOverlay" hidden>Drop a file, then say what to do with it</div>
       <form class="composer" id="composer">
         <div class="ref-row" id="refRow" hidden></div>
         <textarea id="input" rows="2" placeholder="Paste a URL, or describe a change to the open page."></textarea>
@@ -128,7 +128,7 @@
           <button class="tool" type="button" id="plusBtn" data-tip="Start a capture" aria-label="Start a capture">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button class="tool" type="button" id="clipBtn" data-tip="Attach an image reference" aria-label="Attach an image reference" disabled>
+          <button class="tool" type="button" id="clipBtn" data-tip="Attach an image, page, or document" aria-label="Attach an image, page, or document">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 12.5l6.2-6.2a3 3 0 1 1 4.2 4.2l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1"/></svg>
           </button>
           <div class="grow"></div>
@@ -280,7 +280,7 @@
       </figure>
       <button class="lb-nav" type="button" id="lbNext" aria-label="Next image">›</button>
     </div>
-    <input id="file" type="file" accept=".html,.htm,.zip,text/html,image/png,image/jpeg,image/webp,image/gif" hidden>
+    <input id="file" type="file" accept=".html,.htm,.zip,.txt,.md,.csv,.json,.pdf,text/html,text/plain,application/pdf,image/png,image/jpeg,image/webp,image/gif" hidden>
 
     <div class="stubs" hidden>
       <button type="button" id="helpBtn"></button>

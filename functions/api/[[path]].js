@@ -1,9 +1,9 @@
-import { cancelCaptureRun, currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob } from '../lib/edge.js';
+import { cancelCaptureRun, currentUser, forgetJob, json, listStoredIds, queueCapture, queueUpload, readStoredJob, storeHtmlPage } from '../lib/edge.js';
 import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
-import { absolutizeFragment, dropAsked, dropPhrase, sectionKind, swapSection, wantsBorrow, wantsEdit } from '../lib/page-edit.js';
+import { absolutizeFragment, dropAsked, dropPhrase, fileLooksHtml, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
 import { applyReplacements } from '../lib/edit.js';
 import { assertPublicHttpUrl } from '../lib/public-url.js';
 
@@ -205,6 +205,38 @@ function wantsNewScan(message, url) {
   return /^(scan|capture|open|preview|copy|please|can you|could you|go to|look at)\b/i.test(stripped) && stripped.split(/\s+/).length < 8;
 }
 
+function attachedFiles(list) {
+  return (Array.isArray(list) ? list : []).slice(0, 3).map((file) => ({
+    name: String(file?.name || 'file').slice(0, 80),
+    kind: ['html', 'zip', 'doc'].includes(file?.kind) ? file.kind : 'doc',
+    text: String(file?.text || '').slice(0, 12000),
+  })).filter((file) => file.name);
+}
+
+function withFiles(content, files) {
+  if (!files?.length) return content;
+  const block = `Attached files:\n${files.map((file) => `${file.name}\n${file.text || '(no readable text)'}`).join('\n\n')}\n\n`;
+  if (typeof content === 'string') return `${block}${content}`;
+  return content.map((part) => part.type === 'text' ? { ...part, text: `${block}${part.text}` } : part);
+}
+
+function asDocument(name, text) {
+  const raw = String(text || '');
+  if (fileLooksHtml(raw)) return raw;
+  const title = String(name || 'Page').replace(/[&<>"]/g, '');
+  const body = raw.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char]));
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{margin:24px;font:16px/1.5 ui-sans-serif,system-ui;color:#111;background:#fff;white-space:pre-wrap}</style></head><body>${body}</body></html>`;
+}
+
+async function showAttached(env, user, files) {
+  const zip = files.find((file) => file.kind === 'zip');
+  const source = files.find((file) => file.text);
+  if (!source && zip) return { upload: true, reply: 'Opening that file on the phone.' };
+  if (!source?.text) return { reply: 'I could not read that file. Use HTML, text, or a PDF with real text, then say what to do with it.' };
+  const created = await storeHtmlPage(env, user, source.name, asDocument(source.name, source.text));
+  return { reply: 'That file is on the phone.', job: created, showPreview: true };
+}
+
 async function borrowFragment(url) {
   const safe = await assertPublicHttpUrl(url);
   const res = await fetch(safe, {
@@ -223,7 +255,8 @@ async function handleAgent(request, env, user, waitUntil) {
   const purpose = body.purpose || '';
   const jobId = body.activeJobId || '';
   const history = priorMessages(body.history);
-  const content = userContent(message, body.images);
+  const files = attachedFiles(body.files);
+  const content = withFiles(userContent(message, body.images), files);
 
   if (purpose !== 'ready') {
     const usage = await bumpUsage(env, user.id);
@@ -289,10 +322,21 @@ async function handleAgent(request, env, user, waitUntil) {
     return sse({ reply: 'Undid the last edit.', job: await jobForClient(env, job), edited: true });
   }
 
+  if (files.length && wantsPreviewFile(message)) {
+    try {
+      const shown = await showAttached(env, user, files);
+      if (shown.upload) return sse({ reply: shown.reply, upload: true, job: jobId ? publicJob(env, await loadJob(env, user.id, jobId)) : null });
+      if (!shown.job) return sse({ reply: shown.reply, job: jobId ? publicJob(env, await loadJob(env, user.id, jobId)) : null });
+      return sse({ reply: shown.reply, job: publicJob(env, shown.job), showPreview: true });
+    } catch (err) {
+      return sse({ reply: err.message || 'That file did not open.', job: null });
+    }
+  }
+
   if (!jobId) {
     try {
       const turn = await answer(env, [
-        { role: 'system', content: 'You are Protobuild. Read the message and answer it directly in two to five sentences. The person may be chatting, asking a question, or describing a page. They may attach a reference image.' },
+        { role: 'system', content: 'You are Protobuild. Read the message and answer exactly what it asks, in two to five sentences. An attached file is context. Do not claim a file was placed on the preview unless the message asked for that.' },
         ...history,
         { role: 'user', content },
       ], 400);
@@ -310,7 +354,18 @@ async function handleAgent(request, env, user, waitUntil) {
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();
   const outline = visiblePage(page);
-  if (!wantsEdit(message)) return talkAbout(env, job, history, content, outline);
+  const editing = wantsEdit(message) || (files.length > 0 && wantsApplyFile(message));
+  if (!editing) return talkAbout(env, job, history, content, outline);
+
+  if (wantsBorrow(message) && !url) {
+    const htmlFile = files.find((file) => (file.kind === 'html' || fileLooksHtml(file.text)) && file.text);
+    if (!htmlFile) return sse({ reply: 'Name the header, navigation, hero, or footer, and attach that page or paste its link.', job: publicJob(env, job) });
+    const swapped = swapSection(page, htmlFile.text, sectionKind(message));
+    if (!swapped) return sse({ reply: 'I could not find that part in the file and on the scanned page. Name the header, navigation, hero, or footer.', job: publicJob(env, job) });
+    try { await applyChange(env, job, { kind: 'html', html: swapped }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: `Swapped the ${sectionKind(message)} with the one from ${htmlFile.name}. It is on the phone.`, job: await jobForClient(env, job), edited: true });
+  }
 
   if (url && wantsBorrow(message)) {
     try {
@@ -335,7 +390,7 @@ async function handleAgent(request, env, user, waitUntil) {
   let turn;
   try {
     turn = await answer(env, [
-      { role: 'system', content: 'Read the request and edit the captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"hide":"","note":""}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, or display. replace.from must be exact words from the page outline. hide is a short phrase from a block to remove. note is one sentence describing the change. Leave unused fields empty.' },
+      { role: 'system', content: 'Read the request and do only the change it asks for. Return only JSON {"css":"","replace":[{"from":"","to":""}],"hide":"","note":""}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, or display. replace.from must be exact words from the page outline. When an attached file is the source, replace.to is the matching detail from that file. hide is a short phrase from a block to remove. note is one sentence describing the change. Leave unused fields empty. If the request is not a page change, leave every field empty.' },
       ...history,
       { role: 'user', content: withOutline(content, outline) },
     ], 500);
@@ -347,7 +402,12 @@ async function handleAgent(request, env, user, waitUntil) {
   const replaced = applyReplacements(page, parsed.replace);
   const phrase = dropPhrase(replaced.html || page, parsed.hide || '');
   const hidden = phrase !== (replaced.html || page) ? phrase : '';
-  if (!checked.ok && !replaced.html && !hidden) return talkAbout(env, job, history, content, outline, turn.model, turn.quotaReset);
+  if (!checked.ok && !replaced.html && !hidden) {
+    if (files.length && wantsApplyFile(message)) {
+      return sse({ reply: 'I read the file, but those details did not match a line on the page. Name the words to change.', job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
+    }
+    return talkAbout(env, job, history, content, outline, turn.model, turn.quotaReset);
+  }
   try {
     let saved = replaced.html || page;
     if (hidden) saved = hidden;
@@ -369,7 +429,7 @@ async function handleAgent(request, env, user, waitUntil) {
 async function talkAbout(env, job, history, content, outline, model, quotaReset) {
   try {
     const turn = await answer(env, [
-      { role: 'system', content: 'You are Protobuild. Read the message and answer it directly, whether it is a question, a comment, or a request that is not a page edit. Use the page outline when it helps. Write a clear reply in two to five sentences. Do not mention JSON or say you are waiting for a clearer request.' },
+      { role: 'system', content: 'You are Protobuild. Read the message and answer exactly what it asks. Use the page outline and any attached file when they help. An attached file stays attached until the message asks for a change, so do not say it was placed on the preview. Write a clear reply in two to five sentences. Do not mention JSON or say you are waiting for a clearer request.' },
       ...history,
       { role: 'user', content: `Page outline:\n${outline}\n\n${typeof content === 'string' ? content : content.map((part) => part.text || '').join(' ')}` },
     ], 360);
