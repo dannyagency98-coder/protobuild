@@ -1727,7 +1727,7 @@ async function readEvents(res, onEvent) {
 }
 
 async function runAgent({ token, trimmed, history, box, sent, ctrl, images }) {
-  screenMode = activeJob?.status === 'done' ? 'edit' : 'preview';
+  screenMode = activeJob?.status === 'done' && /\b(change|edit|restyle|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b/i.test(trimmed) ? 'edit' : '';
   if (activeJob) showStage(activeJob);
   try {
     const res = await agentFetch({

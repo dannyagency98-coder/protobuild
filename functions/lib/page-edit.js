@@ -64,6 +64,62 @@ export function dropPhrase(html, phrase) {
   return cut(html, hit.start, hit.end);
 }
 
+const SECTION = {
+  header: /header|banner|masthead/i,
+  nav: /nav|menu|navigation/i,
+  footer: /footer/i,
+  hero: /hero|banner|jumbotron/i,
+};
+
+export function sectionKind(message) {
+  const text = String(message || '').toLowerCase();
+  if (/\bfooter\b/.test(text)) return 'footer';
+  if (/\b(nav|menu|navigation)\b/.test(text)) return 'nav';
+  if (/\b(hero|banner)\b/.test(text)) return 'hero';
+  return 'header';
+}
+
+export function wantsEdit(message) {
+  return /\b(change|edit|restyle|recolou?r|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(String(message || ''));
+}
+
+export function wantsBorrow(message) {
+  return wantsEdit(message)
+    && /\b(swap|replace|use|take|copy|bring|grab)\b/i.test(String(message || ''))
+    && /\b(header|nav|menu|navigation|footer|hero|banner|button|section|component)\b/i.test(String(message || ''));
+}
+
+function takeSection(html, kind) {
+  const test = SECTION[kind] || SECTION.header;
+  const hits = ranges(html).filter((item) => {
+    if (SKIP.has(item.name)) return false;
+    const size = item.end - item.start;
+    if (size < 40 || size > 80000) return false;
+    if (item.name === kind) return true;
+    return test.test(`${item.name} ${item.attrs}`);
+  });
+  hits.sort((a, b) => {
+    const prefer = (item) => (item.name === kind ? 0 : 1);
+    return prefer(a) - prefer(b) || (a.end - a.start) - (b.end - b.start);
+  });
+  return hits[0] || null;
+}
+
+export function absolutizeFragment(html, base) {
+  return String(html || '').replace(/(\s(?:src|href)=)(["'])([^"']+)\2/gi, (all, attr, quote, url) => {
+    if (/^(https?:|data:|#|mailto:|tel:)/i.test(url)) return all;
+    try { return `${attr}${quote}${new URL(url, base).href}${quote}`; } catch { return all; }
+  });
+}
+
+export function swapSection(page, fragment, kind) {
+  const incoming = takeSection(fragment, kind);
+  const local = takeSection(page, kind);
+  if (!incoming || !local) return '';
+  const chunk = fragment.slice(incoming.start, incoming.end).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+  return page.slice(0, local.start) + chunk + page.slice(local.end);
+}
+
 export function dropAsked(html, message) {
   const text = String(message || '').toLowerCase();
   if (!/\b(remove|hide|delete|close|dismiss|clear|get rid)\b/.test(text)) return '';

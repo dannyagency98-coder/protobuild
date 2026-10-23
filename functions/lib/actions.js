@@ -64,7 +64,9 @@ export async function applyChange(env, job, body) {
   const html = await pageObj.text();
   if (body.kind === 'html' && body.html) {
     const next = String(body.html);
-    if (/<script|javascript:|onerror\s*=|onload\s*=/i.test(next)) throw bad('Script is not allowed.');
+    const previous = new Set([...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map((match) => match[0]));
+    const added = [...next.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].some((match) => !previous.has(match[0]));
+    if (added) throw bad('Script is not allowed.');
     await env.R2.put(`sites/${job.id}/index.html`, next, {
       httpMetadata: { contentType: 'text/html; charset=utf-8' },
     });

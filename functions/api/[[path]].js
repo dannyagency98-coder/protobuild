@@ -3,7 +3,9 @@ import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
-import { dropAsked, dropPhrase } from '../lib/page-edit.js';
+import { absolutizeFragment, dropAsked, dropPhrase, sectionKind, swapSection, wantsBorrow, wantsEdit } from '../lib/page-edit.js';
+import { applyReplacements } from '../lib/edit.js';
+import { assertPublicHttpUrl } from '../lib/public-url.js';
 
 const PAGES_USER_ID = '6f0c1a2e-7b34-4d15-8a10-000000000001';
 
@@ -180,7 +182,39 @@ function withOutline(content, outline) {
 }
 
 function visiblePage(html) {
-  return String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200);
+  const text = String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 3500);
+  const bits = [];
+  for (const name of ['header', 'nav', 'h1', 'h2', 'button', 'footer']) {
+    const match = String(html || '').match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]{0,220})`, 'i'));
+    if (!match) continue;
+    const line = match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+    if (line) bits.push(`${name}: ${line}`);
+  }
+  return `${bits.join('\n')}\n\n${text}`.trim();
+}
+
+function wantsNewScan(message, url) {
+  if (!url || wantsBorrow(message) || wantsEdit(message)) return false;
+  const stripped = String(message || '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/gi, ' ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!stripped) return true;
+  return /^(scan|capture|open|preview|copy|please|can you|could you|go to|look at)\b/i.test(stripped) && stripped.split(/\s+/).length < 8;
+}
+
+async function borrowFragment(url) {
+  const safe = await assertPublicHttpUrl(url);
+  const res = await fetch(safe, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(12000),
+    headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' },
+  });
+  if (!res.ok) throw new Error('That link did not open.');
+  const html = (await res.text()).slice(0, 1500000);
+  return absolutizeFragment(html, safe);
 }
 
 async function handleAgent(request, env, user, waitUntil) {
@@ -215,7 +249,7 @@ async function handleAgent(request, env, user, waitUntil) {
   }
 
   const url = firstUrl(message);
-  if (url && purpose !== 'edit') {
+  if (url && purpose !== 'edit' && wantsNewScan(message, url)) {
     const mode = /\bimages?\s*only\b|\bonly images\b/i.test(message) ? 'images' : 'clone';
     const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) }, waitUntil);
     const payload = await queued.json();
@@ -258,7 +292,7 @@ async function handleAgent(request, env, user, waitUntil) {
   if (!jobId) {
     try {
       const turn = await answer(env, [
-        { role: 'system', content: 'You are Protobuild. Answer in a short paragraph. The person may attach a reference image.' },
+        { role: 'system', content: 'You are Protobuild. Read the message and answer it directly in two to five sentences. The person may be chatting, asking a question, or describing a page. They may attach a reference image.' },
         ...history,
         { role: 'user', content },
       ], 400);
@@ -275,80 +309,74 @@ async function handleAgent(request, env, user, waitUntil) {
   const pageObj = await env.R2.get(`sites/${jobId}/index.html`);
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();
+  const outline = visiblePage(page);
+  if (!wantsEdit(message)) return talkAbout(env, job, history, content, outline);
+
+  if (url && wantsBorrow(message)) {
+    try {
+      const foreign = await borrowFragment(url);
+      const swapped = swapSection(page, foreign, sectionKind(message));
+      if (!swapped) return sse({ reply: 'I could not find that part on both pages. Name the header, navigation, hero, or footer.', job: publicJob(env, job) });
+      await applyChange(env, job, { kind: 'html', html: swapped });
+      return sse({ reply: `Swapped the ${sectionKind(message)} with the one from ${hostOf(url)}. It is on the phone.`, job: await jobForClient(env, job), edited: true });
+    } catch (err) {
+      return sse({ reply: err.message || 'That link could not be used.', job: publicJob(env, job) });
+    }
+  }
+
   const asked = dropAsked(page, message);
-  const direct = asked ? asked.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '') : '';
-  if (direct && direct !== page) {
+  const direct = asked && asked !== page ? asked : '';
+  if (direct) {
     try { await applyChange(env, job, { kind: 'html', html: direct }); }
     catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
-    return sse({ reply: 'Removed that from the page.', job: await jobForClient(env, job), edited: true });
-  }
-  const outline = visiblePage(page);
-  const question = /\?\s*$/.test(message) || /^(what|why|how|who|when|where|which)\b/i.test(message);
-  if (question) {
-    try {
-      const turn = await answer(env, [
-        { role: 'system', content: 'Answer in two short sentences from the page outline. If it is not there, say so.' },
-        ...history,
-        { role: 'user', content: `Page outline:\n${outline}\n\n${message}` },
-      ], 180);
-      return sse({ reply: (turn.text || 'That is not in the page text.').trim(), job: publicJob(env, job), model: turn.model, quotaReset: turn.quotaReset || '' });
-    } catch (err) {
-      return sse({ reply: err.message || 'The chat did not answer.', job: publicJob(env, job) });
-    }
+    return sse({ reply: 'Removed that from the page. It is on the phone.', job: await jobForClient(env, job), edited: true });
   }
 
   let turn;
   try {
     turn = await answer(env, [
-      { role: 'system', content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"hide":""}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, float, or display. replace.from must be copied exactly from the page text. hide is an exact short phrase from a block the person wants removed. Leave unused fields empty.' },
+      { role: 'system', content: 'Read the request and edit the captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"hide":"","note":""}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, or display. replace.from must be exact words from the page outline. hide is a short phrase from a block to remove. note is one sentence describing the change. Leave unused fields empty.' },
       ...history,
       { role: 'user', content: withOutline(content, outline) },
-    ], 420);
+    ], 500);
   } catch (err) {
     return sse({ reply: err.message || 'The edit did not run.', job: publicJob(env, job) });
   }
   const parsed = parseJson(turn.text);
-  const proposals = [];
   const checked = parsed.css ? validateCss(parsed.css) : { ok: false };
-  if (checked.ok) {
-    proposals.push({ kind: 'css', jobId, before: '(current custom CSS)', after: checked.css, css: checked.css });
-  }
-  const swap = Array.isArray(parsed.replace) ? parsed.replace[0] : null;
-  if (swap?.from && page.includes(swap.from)) {
-    proposals.push({ kind: 'html', jobId, before: String(swap.from).slice(0, 500), after: String(swap.to || '').slice(0, 500), find: swap.from, replace: swap.to || '' });
-  }
-  const phrase = dropPhrase(page, parsed.hide || '');
-  const hidden = phrase !== page ? phrase.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '') : page;
-  if (hidden !== page) {
-    try { await applyChange(env, job, { kind: 'html', html: hidden }); }
-    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
-    return sse({ reply: 'Removed that from the page.', job: await jobForClient(env, job), edited: true, model: turn.model, quotaReset: turn.quotaReset || '' });
-  }
-  if (!proposals.length) {
-    try {
-      const talk = await answer(env, [
-        { role: 'system', content: 'Reply in one or two sentences. If the person asked for an edit you could not see on the page, say what to point at.' },
-        { role: 'user', content: message },
-      ], 160);
-      return sse({ reply: (talk.text || 'Say the words on the screen you want changed.').trim(), job: publicJob(env, job), model: talk.model, quotaReset: talk.quotaReset || '' });
-    } catch (err) {
-      return sse({ reply: err.message || 'Say the words on the screen you want changed.', job: publicJob(env, job) });
-    }
-  }
+  const replaced = applyReplacements(page, parsed.replace);
+  const phrase = dropPhrase(replaced.html || page, parsed.hide || '');
+  const hidden = phrase !== (replaced.html || page) ? phrase : '';
+  if (!checked.ok && !replaced.html && !hidden) return talkAbout(env, job, history, content, outline, turn.model, turn.quotaReset);
   try {
-    for (const proposal of proposals) {
-      await applyChange(env, job, proposal.kind === 'css' ? proposal : { kind: 'html', find: proposal.find, replace: proposal.replace ?? proposal.after });
-    }
+    let saved = replaced.html || page;
+    if (hidden) saved = hidden;
+    if (saved !== page) await applyChange(env, job, { kind: 'html', html: saved });
+    if (checked.ok) await applyChange(env, job, { kind: 'css', css: checked.css });
   } catch (err) {
     return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) });
   }
+  const note = String(parsed.note || '').trim();
   return sse({
-    reply: 'Done. It is on the phone.',
+    reply: note || 'Updated the page. It is on the phone.',
     job: await jobForClient(env, job),
     edited: true,
     model: turn.model,
     quotaReset: turn.quotaReset || '',
   });
+}
+
+async function talkAbout(env, job, history, content, outline, model, quotaReset) {
+  try {
+    const turn = await answer(env, [
+      { role: 'system', content: 'You are Protobuild. Read the message and answer it directly, whether it is a question, a comment, or a request that is not a page edit. Use the page outline when it helps. Write a clear reply in two to five sentences. Do not mention JSON or say you are waiting for a clearer request.' },
+      ...history,
+      { role: 'user', content: `Page outline:\n${outline}\n\n${typeof content === 'string' ? content : content.map((part) => part.text || '').join(' ')}` },
+    ], 360);
+    return sse({ reply: (turn.text || '').trim() || 'I read that. Say a little more and I will answer it.', job: publicJob(env, job), model: model || turn.model, quotaReset: quotaReset || turn.quotaReset || '' });
+  } catch (err) {
+    return sse({ reply: err.message || 'The chat did not answer.', job: publicJob(env, job) });
+  }
 }
 
 function parseJson(text) {
