@@ -549,7 +549,8 @@ async function main() {
     const req = route.request();
     const type = req.resourceType();
     const url = req.url();
-    if (type === 'websocket' || type === 'manifest') return route.abort();
+    if (type === 'media' || type === 'websocket' || type === 'manifest') return route.abort();
+    if (/\.(mp4|webm|m3u8)(\?|$)/i.test(url)) return route.abort();
     if ((type === 'script' || type === 'eventsource' || type === 'xhr' || type === 'fetch' || type === 'ping') && heavyScript.test(url)) return route.abort();
     return route.continue();
   });
@@ -565,6 +566,9 @@ async function main() {
       const isAsset = isImage || ct.includes('css') || ct.includes('font') || ct.includes('woff') || /\.(css|woff2?|ttf)(\?|$)/i.test(pathName);
       if (!isAsset) return;
       if (MODE === 'images' && !isImage) return;
+      if (isImage && images.length >= 20) return;
+      const declared = Number(response.headers()['content-length'] || 0);
+      if (declared > 1500000) return;
       const buf = await response.body().catch(() => null);
       if (!buf || !buf.length) return;
 
@@ -614,7 +618,7 @@ async function main() {
       const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
       const painted = [...document.images].some((img) => img.naturalWidth > 80);
       return painted || text.length > 240;
-    }, { timeout: 3500 }).catch(() => {});
+    }, { timeout: 1500 }).catch(() => {});
 
     const dismissed = await page.evaluate(() => {
       const selectors = [
@@ -703,7 +707,7 @@ async function main() {
 
     note('scrolling', 'Loading images on this page');
     let lastH = 0;
-    const scrollBudget = OPTIONS.productShots ? 2 : 4;
+    const scrollBudget = OPTIONS.productShots ? 1 : 2;
     for (let i = 0; i < scrollBudget; i++) {
       const h = await page.evaluate(() => document.body?.scrollHeight || document.documentElement?.scrollHeight || 0).catch(() => 0);
       if (!h || h === lastH) break;
@@ -794,7 +798,7 @@ async function main() {
       return { photos: [...new Set(photos)].slice(0, 16), icons: [...new Set(icons)].slice(0, 16) };
     }).catch(() => ({ photos: [], icons: [] }));
 
-    const assetCap = Date.now() - started > 20000 ? 8 : 16;
+    const assetCap = Date.now() - started > 12000 ? 4 : 8;
     note('saving', `Copying ${assetCap} images and icons`);
     const pendingAssets = [...(pageAssets.icons || []), ...(pageAssets.photos || [])]
       .filter((assetUrl) => assetUrl && !resourceMap.has(assetUrl))
