@@ -963,14 +963,25 @@ function formatElapsed(from) {
   return `${mins}:${String(secs % 60).padStart(2, '0')}`;
 }
 
+function remainLabel(job) {
+  const start = Date.parse(job?.created_at || '');
+  const gone = Number.isFinite(start) ? Math.floor((Date.now() - start) / 1000) : 0;
+  const left = Math.max(0, 45 - gone);
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+}
+
 function paintClock() {
-  const clock = jobLive(activeJob) ? formatElapsed(activeJob.created_at) : '';
-  const badge = document.getElementById('stageClock');
-  if (badge) {
-    badge.hidden = !clock;
-    badge.textContent = clock;
+  const now = new Date();
+  const time = document.getElementById('phoneTime');
+  const date = document.getElementById('phoneDate');
+  if (time) time.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (date) date.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  const scanning = jobLive(activeJob);
+  const clock = document.getElementById('captureClock');
+  if (clock) {
+    clock.hidden = !scanning;
+    clock.textContent = scanning ? remainLabel(activeJob) : '';
   }
-  document.querySelectorAll('[data-scan-clock]').forEach((el) => { el.textContent = clock; });
 }
 
 let sendToken = 0;
@@ -2962,6 +2973,7 @@ document.addEventListener('keydown', (e) => {
 });
 bindSplits();
 setInterval(paintClock, 1000);
+paintClock();
 applyPrefs(readPrefs(), { rights: true });
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (readPrefs().theme === 'system') applyPrefs(readPrefs());

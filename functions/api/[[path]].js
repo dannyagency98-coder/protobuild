@@ -3,6 +3,7 @@ import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
+import { dropAsked, dropPhrase } from '../lib/page-edit.js';
 
 const PAGES_USER_ID = '6f0c1a2e-7b34-4d15-8a10-000000000001';
 
@@ -274,6 +275,13 @@ async function handleAgent(request, env, user, waitUntil) {
   const pageObj = await env.R2.get(`sites/${jobId}/index.html`);
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();
+  const asked = dropAsked(page, message);
+  const direct = asked ? asked.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '') : '';
+  if (direct && direct !== page) {
+    try { await applyChange(env, job, { kind: 'html', html: direct }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: 'Removed that from the page.', job: await jobForClient(env, job), edited: true });
+  }
   const outline = visiblePage(page);
   const question = /\?\s*$/.test(message) || /^(what|why|how|who|when|where|which)\b/i.test(message);
   if (question) {
@@ -292,7 +300,7 @@ async function handleAgent(request, env, user, waitUntil) {
   let turn;
   try {
     turn = await answer(env, [
-      { role: 'system', content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}]}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, float, or display. replace.from must be copied exactly from the page text. replace.to may include a short HTML section. Leave a field empty when you are not using it. Do not apply the change yourself.' },
+      { role: 'system', content: 'You edit a captured page. Return only JSON {"css":"","replace":[{"from":"","to":""}],"hide":""}. css may set color, type, size, alignment, spacing, borders, width, flex, grid, order, float, or display. replace.from must be copied exactly from the page text. hide is an exact short phrase from a block the person wants removed. Leave unused fields empty.' },
       ...history,
       { role: 'user', content: withOutline(content, outline) },
     ], 420);
@@ -309,18 +317,35 @@ async function handleAgent(request, env, user, waitUntil) {
   if (swap?.from && page.includes(swap.from)) {
     proposals.push({ kind: 'html', jobId, before: String(swap.from).slice(0, 500), after: String(swap.to || '').slice(0, 500), find: swap.from, replace: swap.to || '' });
   }
+  const phrase = dropPhrase(page, parsed.hide || '');
+  const hidden = phrase !== page ? phrase.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '') : page;
+  if (hidden !== page) {
+    try { await applyChange(env, job, { kind: 'html', html: hidden }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: 'Removed that from the page.', job: await jobForClient(env, job), edited: true, model: turn.model, quotaReset: turn.quotaReset || '' });
+  }
   if (!proposals.length) {
-    return sse({
-      reply: 'That change is waiting on a clearer request. Wording, color, type, size, layout, and a new section can be proposed.',
-      job: publicJob(env, job),
-      model: turn.model,
-      editFailed: true,
-    });
+    try {
+      const talk = await answer(env, [
+        { role: 'system', content: 'Reply in one or two sentences. If the person asked for an edit you could not see on the page, say what to point at.' },
+        { role: 'user', content: message },
+      ], 160);
+      return sse({ reply: (talk.text || 'Say the words on the screen you want changed.').trim(), job: publicJob(env, job), model: talk.model, quotaReset: talk.quotaReset || '' });
+    } catch (err) {
+      return sse({ reply: err.message || 'Say the words on the screen you want changed.', job: publicJob(env, job) });
+    }
+  }
+  try {
+    for (const proposal of proposals) {
+      await applyChange(env, job, proposal.kind === 'css' ? proposal : { kind: 'html', find: proposal.find, replace: proposal.replace ?? proposal.after });
+    }
+  } catch (err) {
+    return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) });
   }
   return sse({
-    reply: 'That change is waiting below. Apply it when it looks right.',
-    job: publicJob(env, job),
-    proposals,
+    reply: 'Done. It is on the phone.',
+    job: await jobForClient(env, job),
+    edited: true,
     model: turn.model,
     quotaReset: turn.quotaReset || '',
   });
