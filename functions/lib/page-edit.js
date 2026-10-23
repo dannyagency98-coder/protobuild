@@ -36,24 +36,61 @@ function cut(html, start, end) {
   return html.slice(0, start) + html.slice(end);
 }
 
-function shortest(html, test) {
+function shortest(html, test, max = 30000) {
   const hits = ranges(html).filter((item) => {
     if (SKIP.has(item.name)) return false;
     const inner = html.slice(item.innerStart, item.innerEnd);
     const size = item.end - item.start;
-    if (size < 20 || size > 30000) return false;
+    if (size < 20 || size > max) return false;
     return test(item, inner);
   });
   hits.sort((a, b) => (a.end - a.start) - (b.end - b.start));
   return hits[0] || null;
 }
 
+const COOKIE_TEXT = /cookie|consent|gdpr|onetrust|cookiebot|aceptar todas|aceptar solo|configuraci[oó]n de cookies|cookies t[eé]cnicas|accept all|accept only|cookie settings|cookie policy|we use cookies|uso de cookies|pol[ií]tica de cookies/i;
+
+export function asksCookie(message) {
+  const text = String(message || '').toLowerCase();
+  return /\b(remo\w*|hide|delete|dismiss|clear|close|rid)\b/.test(text) && /cookie|consent|gdpr|banner/.test(text);
+}
+
 export function dropCookie(html) {
-  const byName = shortest(html, (item) => /cookie|consent|onetrust|cookiebot|gdpr|didomi|trustarc|privacy-banner|cc-banner|cc-window/i.test(item.attrs));
-  if (byName) return cut(html, byName.start, byName.end);
-  const byText = shortest(html, (item, inner) => /cookie settings|accept all|cookie policy|personalise cookie|continue without accepting/i.test(inner));
-  if (byText) return cut(html, byText.start, byText.end);
-  return html;
+  let next = String(html || '');
+  for (let pass = 0; pass < 12; pass += 1) {
+    const byName = shortest(next, (item) => /cookie|consent|onetrust|cookiebot|gdpr|didomi|trustarc|privacy-banner|cc-banner|cc-window|ot-sdk/i.test(item.attrs), 200000);
+    const byText = shortest(next, (item, inner) => COOKIE_TEXT.test(inner.replace(/<[^>]+>/g, ' ')), 200000);
+    const hit = byName || byText;
+    if (!hit) break;
+    const parent = climbCookie(next, hit);
+    const cutHtml = cut(next, parent.start, parent.end);
+    if (cutHtml === next) break;
+    next = cutHtml;
+  }
+  if (next === html) return html;
+  if (!next.includes('data-proto-cookie')) {
+    const hide = '<style data-proto-cookie>[class*="cookie" i],[id*="cookie" i],[class*="consent" i],[id*="onetrust" i],[class*="onetrust" i]{display:none!important}</style>';
+    next = /<head[^>]*>/i.test(next) ? next.replace(/<head[^>]*>/i, (open) => `${open}${hide}`) : `${hide}${next}`;
+  }
+  return next;
+}
+
+function climbCookie(html, hit) {
+  let current = hit;
+  const all = ranges(html);
+  for (let guard = 0; guard < 5; guard += 1) {
+    const parent = all.find((item) => item.start < current.start && item.end > current.end && !SKIP.has(item.name) && item.name !== 'header' && item.name !== 'nav');
+    if (!parent) break;
+    const size = parent.end - parent.start;
+    if (size > 180000) break;
+    const inner = html.slice(parent.innerStart, parent.innerEnd);
+    const text = inner.replace(/<[^>]+>/g, ' ');
+    if (/<img\b/i.test(inner) && !/<img\b/i.test(html.slice(current.innerStart, current.innerEnd))) break;
+    if (!COOKIE_TEXT.test(text)) break;
+    if (size > (current.end - current.start) * 4 && text.length > 4000) break;
+    current = parent;
+  }
+  return current;
 }
 
 export function dropPhrase(html, phrase) {
@@ -141,8 +178,8 @@ export function swapSection(page, fragment, kind) {
 
 export function dropAsked(html, message) {
   const text = String(message || '').toLowerCase();
-  if (!/\b(remove|hide|delete|close|dismiss|clear|get rid)\b/.test(text)) return '';
-  if (/cookie|consent|gdpr|banner|popup|pop-up|modal|dialog|overlay/.test(text)) {
+  if (!/\b(remo\w*|hide|delete|close|dismiss|clear|rid)\b/.test(text)) return '';
+  if (/cookie|consent|gdpr|banner|popup|pop-up|modal|dialog|overlay/.test(text) || asksCookie(message)) {
     const next = dropCookie(html);
     if (next !== html) return next;
   }

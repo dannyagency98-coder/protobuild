@@ -14,6 +14,7 @@ const TYPES = {
   avif: 'image/avif',
   woff: 'font/woff',
   woff2: 'font/woff2',
+  otf: 'font/otf',
   ttf: 'font/ttf',
   json: 'application/json',
   zip: 'application/zip',

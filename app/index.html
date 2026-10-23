@@ -116,7 +116,7 @@
       </div>
       <div class="hero" id="hero">
         <h1>What do you want to create?</h1>
-        <p class="hero-limits">Attach a file or scan a page, then say what to do with it. Nothing changes until the prompt asks.</p>
+        <p class="hero-limits">Scan a site onto the phone, edit it in chat, share a dev link, or download the page.</p>
       </div>
       <div class="stream" id="stream" role="log" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
       <button type="button" class="new-text hidden" id="newText">New text</button>
@@ -140,9 +140,9 @@
         <p class="send-hint">Enter to send · Shift+Enter for a new line</p>
       </form>
       <div class="starters" id="starters">
-        <button type="button" data-prompt="scan example.com"><strong>Scan a sample page</strong><span>Open a simple public page</span></button>
-        <button type="button" data-prompt="scan https://www.apple.com"><strong>Scan a live site</strong><span>Capture the page as it appears</span></button>
-        <button type="button" data-prompt="images only https://www.wikipedia.org"><strong>Collect the images</strong><span>Save the pictures from a page</span></button>
+        <button type="button" data-prompt="scan https://www.apple.com"><strong>Scan a site</strong><span>Open the page on the phone</span></button>
+        <button type="button" data-prompt="share"><strong>Share a dev link</strong><span>Open the saved page on another device</span></button>
+        <button type="button" data-prompt="download"><strong>Download the page</strong><span>Save the HTML, images, and fonts</span></button>
       </div>
     </section>
     <button class="split" id="splitStage" type="button" aria-label="Resize chat and phone" data-tip="Drag to resize. Double-click to reset."></button>
@@ -155,6 +155,7 @@
           <button class="stage-btn" type="button" data-zip disabled><span class="btn-label">Download</span></button>
           <button class="stage-btn" type="button" id="galleryBtn" disabled><span class="btn-label">Gallery</span></button>
           <button class="stage-btn" type="button" id="shareQuick" disabled><span class="btn-label">Share</span></button>
+          <button class="stage-btn" type="button" id="reloadBtn" disabled><span class="btn-label">Reload</span></button>
         </div>
         <div class="stage-extra">
         <div class="stage-tools">
@@ -178,7 +179,7 @@
           <button class="stage-btn" type="button" id="compareBtn" disabled><span class="btn-label">Original</span></button>
           <button class="stage-btn" type="button" id="pickBtn" disabled><span class="btn-label">Pick</span></button>
           <button class="stage-btn" type="button" id="undoBtn" disabled><span class="btn-label">Undo</span></button>
-          <button class="stage-btn" type="button" id="reloadBtn" disabled><span class="btn-label">Reload</span></button>
+          <button class="stage-btn" type="button" id="reloadExtra" disabled><span class="btn-label">Reload</span></button>
           <div class="stage-more">
             <button class="stage-btn" type="button" id="moreBtn" aria-label="Open, download, or share">More</button>
             <div class="stage-menu hidden" id="stageMenu">

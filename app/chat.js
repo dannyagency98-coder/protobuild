@@ -1141,6 +1141,13 @@ function screenLabel() {
   return screenMode === 'edit' ? 'Editing the screen' : 'Previewing the screen';
 }
 
+function progressLabel(job) {
+  if (screenMode === 'edit') return 'Editing the screen';
+  const count = String(job?.phaseDetail || '').match(/(\d+)\s*\/\s*(\d+)/);
+  if (count && (job?.status === 'queued' || job?.status === 'running')) return `Previewing the screen · ${count[1]}/${count[2]}`;
+  return 'Previewing the screen';
+}
+
 function paintStageEmpty(job) {
   const idle = document.getElementById('emptyIdle');
   const steps = document.getElementById('captureSteps');
@@ -1152,7 +1159,7 @@ function paintStageEmpty(job) {
   if (steps) {
     steps.hidden = !(scanning || editing);
     const line = document.getElementById('captureLine');
-    if (line && (scanning || editing)) line.textContent = screenLabel();
+    if (line && (scanning || editing)) line.textContent = scanning ? progressLabel(job) : 'Editing the screen';
   }
   if (fail) {
     fail.hidden = !bad;
@@ -1355,15 +1362,15 @@ function renderLive(box, job) {
     live.innerHTML = '<p class="scan-line"><i class="spin" aria-hidden="true"></i><span></span></p>';
     line = live.querySelector('.scan-line span');
   }
-  if (line) line.textContent = screenLabel();
+  if (line) line.textContent = progressLabel(job);
 }
 
 function statusLine(job) {
-  if (job.status === 'done') return 'The page is in the preview. You can edit it, share it, or download it.';
+  if (job.status === 'done') return 'The page is on the phone. Share the dev link, download it, or describe a change.';
   if (job.status === 'blocked') return cleanError(job.error) || 'This site blocked the scan. Attach a saved copy of the page.';
   if (job.status === 'failed' && /stopped/i.test(job.error || '')) return 'Stopped.';
   if (job.status === 'failed') return cleanError(job.error) || 'The scan did not finish. Try again, or attach a saved copy of the page.';
-  return screenLabel();
+  return progressLabel(job);
 }
 
 function wireCard(box, job) {
@@ -1729,7 +1736,8 @@ async function readEvents(res, onEvent) {
 async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments }) {
   const items = attachments || [];
   const editing = activeJob?.status === 'done' && (
-    /\b(change|edit|restyle|recolou?r|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(trimmed)
+    /\b(change|edit|restyle|recolou?r|swap|replace|remo\w*|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(trimmed)
+    || (/cookie|consent|banner/i.test(trimmed) && /\bremo/i.test(trimmed))
     || (/\b(detail|details|text|price|prices|content)\b/i.test(trimmed) && /\b(file|document|this|these)\b/i.test(trimmed) && /\b(swap|replace|use|take|apply|put|add|bring)\b/i.test(trimmed))
   );
   screenMode = editing ? 'edit' : '';
@@ -2202,14 +2210,28 @@ document.querySelectorAll('#paneSwitch [data-pane]').forEach((btn) => {
     if (btn.dataset.pane === 'preview') requestAnimationFrame(fitPhone);
   });
 });
-document.getElementById('homeNav').onclick = () => {
+function openConnected(anchor) {
+  const ready = activeJob?.status === 'done';
+  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, share a dev link, or download the page. An attached file stays in this chat until the prompt says what to do with it.</p><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="upload">Attach a page</button><button class="menu-act" type="button" data-go="share" ${ready ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${ready ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${ready ? '' : 'disabled'}>Reload preview</button><button class="menu-act" type="button" data-go="fresh">New chat</button>`, anchor);
+  wirePop({
+    scan: () => fillPrompt('scan '),
+    upload: () => { closePop(); pickFile('ref'); },
+    share: () => { closePop(); if (activeJob) openShare(activeJob); },
+    download: () => { closePop(); if (activeJob?.id) download('/api/jobs/' + activeJob.id + '/zip?type=full', zipName(activeJob)); },
+    reload: () => { closePop(); reloadPreview(); },
+    fresh: () => {
+      closePop();
+      addressMode = 'push';
+      resetChat();
+      refreshJobs();
+      input.focus();
+    },
+  });
+}
+document.getElementById('homeNav').onclick = (event) => {
   closeSettingsPage();
   closeDrawer();
-  closePop();
-  addressMode = 'push';
-  resetChat();
-  refreshJobs();
-  input.focus();
+  openConnected(event.currentTarget);
 };
 function filterChats() {
   const box = document.getElementById('chatSearch');
@@ -2261,7 +2283,14 @@ window.addEventListener('resize', () => {
 });
 function bindStarters() {
   document.querySelectorAll('[data-prompt]').forEach((btn) => {
-    btn.onclick = () => onSend(btn.getAttribute('data-prompt'));
+    btn.onclick = () => {
+      const prompt = btn.getAttribute('data-prompt') || '';
+      if ((prompt === 'share' || prompt === 'download') && activeJob?.status !== 'done') {
+        toast('Scan a page first. Share and download use that page.');
+        return;
+      }
+      onSend(prompt);
+    };
   });
 }
 
@@ -2658,11 +2687,11 @@ function closeFeedback() {
 }
 
 function openHelp(e) {
-  showPop(`<h3>Help</h3><p class="menu-note">Name a site in the chat on your computer. Protobuild saves the page and shows it in the iPhone preview. A shared link can open on a phone. Drag the gaps between the columns. Each one keeps its own width. The Local menu opens settings, the theme, and feedback.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
+  showPop(`<h3>Help</h3><p class="menu-note">Scan a site, edit it in chat, share a dev link, or download the page. Home, attach, share, download, and reload stay on this chat.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
   wirePop({
     focus: () => fillPrompt('scan '),
     sample: () => { closePop(); onSend('scan example.com'); },
-    file: () => { closePop(); document.getElementById('file').click(); },
+    file: () => { closePop(); pickFile('ref'); },
     images: () => {
       closePop();
       if (!activeJob) { toast('Open a capture first.'); return; }
@@ -2678,7 +2707,7 @@ function openHelp(e) {
 }
 
 function openPlus(e) {
-  showPop(`<h3>New scan</h3><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Upload a saved page</button>`, e.currentTarget);
+  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, attach a file, then say what to do with it. Share and download use the page on the phone.</p><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Attach a page</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${activeJob?.status === 'done' ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${activeJob?.status === 'done' ? '' : 'disabled'}>Reload preview</button>`, e.currentTarget);
   const field = document.getElementById('scanUrl');
   document.getElementById('scanUrlForm')?.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -2693,7 +2722,10 @@ function openPlus(e) {
       if (raw) { closePop(); onSend(`images only ${raw}`); }
       else fillPrompt('images only ');
     },
-    file: () => { closePop(); document.getElementById('file').click(); },
+    file: () => { closePop(); pickFile('ref'); },
+    share: () => { closePop(); if (activeJob) openShare(activeJob); },
+    download: () => { closePop(); if (activeJob?.id) download('/api/jobs/' + activeJob.id + '/zip?type=full', zipName(activeJob)); },
+    reload: () => { closePop(); reloadPreview(); },
   });
   setTimeout(() => field?.focus(), 40);
 }
@@ -2743,7 +2775,7 @@ function pickFile(mode) {
   input.click();
 }
 document.getElementById('clipBtn').onclick = () => pickFile('ref');
-document.getElementById('stageUpload')?.addEventListener('click', () => pickFile('page'));
+document.getElementById('stageUpload')?.addEventListener('click', () => openConnected(document.getElementById('homeNav')));
 const refs = [];
 
 function paintRefs() {
@@ -2928,8 +2960,8 @@ function onThemeClick(e) {
 document.getElementById('settingsTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('accountTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('acctSettings').onclick = () => showSettingsPanel('interface');
-document.getElementById('acctUpload').onclick = () => pickFile('page');
-document.getElementById('captureUpload')?.addEventListener('click', () => pickFile('page'));
+document.getElementById('acctUpload').onclick = () => { closeSettingsPage(); openConnected(document.getElementById('homeNav')); };
+document.getElementById('captureUpload')?.addEventListener('click', () => { closeSettingsPage(); openConnected(document.getElementById('homeNav')); });
 document.getElementById('acctWidths').onclick = () => document.getElementById('prefResetWidths').click();
 document.getElementById('acctImages').onclick = () => {
   if (!activeJob) { toast('Open a capture first.'); return; }
@@ -3045,6 +3077,7 @@ function reloadPreview() {
   if (frame) frame.src = previewAddress(activeJob, true);
 }
 document.getElementById('reloadBtn')?.addEventListener('click', reloadPreview);
+document.getElementById('reloadExtra')?.addEventListener('click', reloadPreview);
 document.getElementById('winReload')?.addEventListener('click', reloadPreview);
 document.getElementById('zoomOut')?.addEventListener('click', () => stepZoom(-1));
 document.getElementById('zoomIn')?.addEventListener('click', () => stepZoom(1));

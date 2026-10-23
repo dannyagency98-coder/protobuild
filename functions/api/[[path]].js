@@ -3,7 +3,7 @@ import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
-import { absolutizeFragment, dropAsked, dropPhrase, fileLooksHtml, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
+import { absolutizeFragment, asksCookie, dropAsked, dropPhrase, fileLooksHtml, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
 import { applyReplacements } from '../lib/edit.js';
 import { assertPublicHttpUrl } from '../lib/public-url.js';
 
@@ -354,7 +354,7 @@ async function handleAgent(request, env, user, waitUntil) {
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();
   const outline = visiblePage(page);
-  const editing = wantsEdit(message) || (files.length > 0 && wantsApplyFile(message));
+  const editing = wantsEdit(message) || asksCookie(message) || (files.length > 0 && wantsApplyFile(message));
   if (!editing) return talkAbout(env, job, history, content, outline);
 
   if (wantsBorrow(message) && !url) {
@@ -385,6 +385,9 @@ async function handleAgent(request, env, user, waitUntil) {
     try { await applyChange(env, job, { kind: 'html', html: direct }); }
     catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
     return sse({ reply: 'Removed that from the page. It is on the phone.', job: await jobForClient(env, job), edited: true });
+  }
+  if (asksCookie(message)) {
+    return sse({ reply: 'I could not find a cookie block on this page. Reload the preview, or scan the site again and ask once more.', job: publicJob(env, job) });
   }
 
   let turn;
@@ -429,7 +432,7 @@ async function handleAgent(request, env, user, waitUntil) {
 async function talkAbout(env, job, history, content, outline, model, quotaReset) {
   try {
     const turn = await answer(env, [
-      { role: 'system', content: 'You are Protobuild. Read the message and answer exactly what it asks. Use the page outline and any attached file when they help. An attached file stays attached until the message asks for a change, so do not say it was placed on the preview. Write a clear reply in two to five sentences. Do not mention JSON or say you are waiting for a clearer request.' },
+      { role: 'system', content: 'You are Protobuild. Read the message and answer exactly what it asks. Use the page outline and any attached file when they help. You cannot change the page from this reply, so do not claim a banner was removed or a file was placed on the preview. Write a clear reply in two to five sentences. Do not mention JSON or say you are waiting for a clearer request.' },
       ...history,
       { role: 'user', content: `Page outline:\n${outline}\n\n${typeof content === 'string' ? content : content.map((part) => part.text || '').join(' ')}` },
     ], 360);

@@ -1,3 +1,12 @@
+export function fontFile(type, url) {
+  const kind = `${type || ''} ${url || ''}`.toLowerCase();
+  if (kind.includes('woff2')) return { ext: '.woff2', type: 'font/woff2' };
+  if (kind.includes('woff')) return { ext: '.woff', type: 'font/woff' };
+  if (kind.includes('ttf') || kind.includes('font/sfnt')) return { ext: '.ttf', type: 'font/ttf' };
+  if (kind.includes('otf')) return { ext: '.otf', type: 'font/otf' };
+  return null;
+}
+
 export function imageFile(bytes, type) {
   const head = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
   if (head.length < 8) return null;
