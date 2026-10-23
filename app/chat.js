@@ -225,7 +225,7 @@ function syncStageActions(job) {
   tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Share ${name}` : wait);
   tuneBtn(document.getElementById('galleryBtn'), !!job?.id, 'Gallery', job?.id ? `Images from ${name}` : 'Open a capture to see its images');
   tuneBtn(document.getElementById('clipBtn'), true, '', 'Attach an image, page, or document');
-  tuneBtn(document.getElementById('reloadBtn'), ready, '', ready ? 'Reload the preview' : wait);
+  tuneBtn(document.getElementById('reloadBtn'), ready, '', 'Reload');
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
   document.querySelectorAll('[data-share-days]').forEach((btn) => {
@@ -3070,11 +3070,18 @@ document.querySelectorAll('[data-share-days]').forEach((btn) => {
 });
 function reloadPreview() {
   if (!activeJob || activeJob.status !== 'done') {
-    toast('The preview is not ready yet.');
+    toast('Not ready.');
     return;
   }
   const frame = document.getElementById('stage');
-  if (frame) frame.src = previewAddress(activeJob, true);
+  const btn = document.getElementById('reloadBtn');
+  if (!frame) return;
+  const next = previewAddress(activeJob, true);
+  btn?.classList.add('is-spin');
+  const stop = () => btn?.classList.remove('is-spin');
+  frame.addEventListener('load', stop, { once: true });
+  window.setTimeout(stop, 4000);
+  frame.src = next;
 }
 document.getElementById('reloadBtn')?.addEventListener('click', reloadPreview);
 document.getElementById('reloadExtra')?.addEventListener('click', reloadPreview);

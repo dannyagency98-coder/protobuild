@@ -581,7 +581,8 @@ html[data-history="off"] #splitSide {
 }
 .stage-bar > .tab { grid-column: 1; grid-row: 1; }
 .stage-bar > .stage-actions { grid-column: 2; grid-row: 1; }
-.stage-reload { grid-column: 1 / -1; grid-row: 2; display: flex; justify-content: flex-end; }
+.stage-reload { grid-column: 1 / -1; grid-row: 2; display: flex; justify-content: flex-start; }
+.stage-reload .icon-btn.is-spin svg { animation: auth-spin 0.7s linear infinite; }
 .stage-reload .icon-btn {
   width: 28px;
   height: 28px;
