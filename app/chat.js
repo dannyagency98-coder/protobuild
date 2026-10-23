@@ -225,7 +225,7 @@ function syncStageActions(job) {
   tuneBtn(document.getElementById('shareQuick'), ready, 'Share', ready ? `Share ${name}` : wait);
   tuneBtn(document.getElementById('galleryBtn'), !!job?.id, 'Gallery', job?.id ? `Images from ${name}` : 'Open a capture to see its images');
   tuneBtn(document.getElementById('clipBtn'), true, '', 'Attach an image, page, or document');
-  tuneBtn(document.getElementById('reloadBtn'), ready, 'Reload', ready ? 'Reload the preview' : wait);
+  tuneBtn(document.getElementById('reloadBtn'), ready, '', ready ? 'Reload the preview' : wait);
   const exp = document.getElementById('shareExp');
   if (exp) exp.textContent = shareExpiryLine(job);
   document.querySelectorAll('[data-share-days]').forEach((btn) => {
@@ -258,8 +258,8 @@ function syncStageActions(job) {
   const box = document.getElementById('input');
   if (box) {
     box.placeholder = ready
-      ? `Say what to change on ${name}.`
-      : (scanning ? `Scanning ${name}.` : 'Paste a URL, attach a file, or say what to change.');
+      ? `Describe what should change on ${name}.`
+      : (scanning ? `Opening ${name}.` : 'Describe what you want, or paste a site.');
   }
 }
 
@@ -2285,8 +2285,8 @@ function bindStarters() {
   document.querySelectorAll('[data-prompt]').forEach((btn) => {
     btn.onclick = () => {
       const prompt = btn.getAttribute('data-prompt') || '';
-      if ((prompt === 'share' || prompt === 'download') && activeJob?.status !== 'done') {
-        toast('Scan a page first. Share and download use that page.');
+      if (btn.dataset.needs === 'page' && activeJob?.status !== 'done') {
+        toast('Open a page first. Share and download use that page.');
         return;
       }
       onSend(prompt);

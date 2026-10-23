@@ -193,8 +193,16 @@ function visiblePage(html) {
   return `${bits.join('\n')}\n\n${text}`.trim();
 }
 
+function wantsImagesOnly(message) {
+  const text = String(message || '');
+  const pictures = /\b(images?|pictures?|photos?|shots?)\b/i.test(text);
+  const only = /\b(only|just the|collect|gather|extract)\b/i.test(text);
+  return pictures && only && !/\b(page|layout|whole site|full site)\b/i.test(text);
+}
+
 function wantsNewScan(message, url) {
-  if (!url || wantsBorrow(message) || wantsEdit(message)) return false;
+  if (!url || wantsBorrow(message) || wantsEdit(message) || wantsPreviewFile(message) || wantsApplyFile(message)) return false;
+  if (/\b(on|onto|into) (this |the )?(page|site|screen|preview|phone)\b/i.test(message) && !/\b(scan|capture|open|show|preview|load)\b/i.test(message)) return false;
   const stripped = String(message || '')
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/gi, ' ')
@@ -202,7 +210,8 @@ function wantsNewScan(message, url) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!stripped) return true;
-  return /^(scan|capture|open|preview|copy|please|can you|could you|go to|look at)\b/i.test(stripped) && stripped.split(/\s+/).length < 8;
+  if (stripped.split(/\s+/).length > 36) return false;
+  return /\b(scan|capture|open|preview|copy|show|see|load|grab|pull|bring|put|display|look|check|visit|phone)\b/i.test(stripped);
 }
 
 function attachedFiles(list) {
@@ -283,14 +292,14 @@ async function handleAgent(request, env, user, waitUntil) {
 
   const url = firstUrl(message);
   if (url && purpose !== 'edit' && wantsNewScan(message, url)) {
-    const mode = /\bimages?\s*only\b|\bonly images\b/i.test(message) ? 'images' : 'clone';
+    const mode = wantsImagesOnly(message) ? 'images' : 'clone';
     const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) }, waitUntil);
     const payload = await queued.json();
     if (!queued.ok) return sse({ reply: payload.error || 'That link was not copied.', job: null });
     return sse({ reply: 'Previewing the screen.', job: publicJob(env, payload), pendingLine: true });
   }
 
-  if (jobId && /\b(share|live link)\b/i.test(message)) {
+  if (jobId && /\b(share|live link|dev link)\b|\b(send|give|make)\b[^.]{0,40}\b(link|url)\b/i.test(message) && !wantsEdit(message)) {
     const job = await loadJob(env, user.id, jobId);
     if (!job) return sse({ reply: 'That capture is gone.', job: null });
     if (job.status !== 'done') return sse({ reply: 'The page is still copying. The link can be made when the preview is ready.', job: publicJob(env, job) });
@@ -301,7 +310,7 @@ async function handleAgent(request, env, user, waitUntil) {
     return sse({ reply: link ? `Live link: ${link}` : 'The live link is off.', job: publicJob(env, next), shareUrl: link });
   }
 
-  if (jobId && /\b(download|zip)\b/i.test(message)) {
+  if (jobId && /\b(download|zip|export)\b|\bsave (the|this) (page|file|copy)\b/i.test(message) && !wantsEdit(message)) {
     const job = await loadJob(env, user.id, jobId);
     if (!job) return sse({ reply: 'That capture is gone.', job: null });
     const action = /\bimages?\b/i.test(message) ? 'images' : 'full';
