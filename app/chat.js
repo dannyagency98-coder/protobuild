@@ -2279,7 +2279,7 @@ document.querySelectorAll('#paneSwitch [data-pane]').forEach((btn) => {
 });
 function openConnected(anchor) {
   const ready = activeJob?.status === 'done';
-  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, share a dev link, or download the page. An attached file stays in this chat until the prompt says what to do with it.</p><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="upload">Attach a page</button><button class="menu-act" type="button" data-go="share" ${ready ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${ready ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${ready ? '' : 'disabled'}>Reload preview</button><button class="menu-act" type="button" data-go="fresh">New chat</button>`, anchor, true);
+  showPop(`<h3>This page</h3><p class="menu-note">Scan, attach, share, or download.</p><button class="menu-act" type="button" data-go="scan">Scan a site</button><button class="menu-act" type="button" data-go="upload">Attach a page</button><button class="menu-act" type="button" data-go="share" ${ready ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${ready ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${ready ? '' : 'disabled'}>Reload preview</button><button class="menu-act" type="button" data-go="fresh">New chat</button>`, anchor, true);
   wirePop({
     scan: () => fillPrompt('scan '),
     upload: () => { closePop(); pickFile('ref'); },
@@ -2764,7 +2764,7 @@ function closeFeedback() {
 }
 
 function openHelp(e) {
-  showPop(`<h3>Help</h3><p class="menu-note">Scan a site, edit it in chat, share a dev link, or download the page. Home, attach, share, download, and reload stay on this chat.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
+  showPop(`<h3>Help</h3><p class="menu-note">Scan a site, then edit it in chat.</p><button class="menu-act" type="button" data-go="focus">Write a scan</button><button class="menu-act" type="button" data-go="sample">Scan example.com</button><button class="menu-act" type="button" data-go="file">Attach a saved page</button><button class="menu-act" type="button" data-go="images" ${activeJob ? '' : 'disabled'}>Show images</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open the preview</button>`, e.currentTarget);
   wirePop({
     focus: () => fillPrompt('scan '),
     sample: () => { closePop(); onSend('scan example.com'); },
@@ -2784,7 +2784,7 @@ function openHelp(e) {
 }
 
 function openPlus(e) {
-  showPop(`<h3>This page</h3><p class="menu-note">Scan a site, attach a file, then say what to do with it. Share and download use the page on the phone.</p><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Attach a page</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${activeJob?.status === 'done' ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${activeJob?.status === 'done' ? '' : 'disabled'}>Reload preview</button>`, e.currentTarget, true);
+  showPop(`<h3>This page</h3><p class="menu-note">Scan, attach, share, or download.</p><form class="scan-url" id="scanUrlForm"><input id="scanUrl" type="text" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-label="Site to scan"><button class="menu-act" type="submit">Scan</button></form><button class="menu-act" type="button" data-go="images">Collect images only</button><button class="menu-act" type="button" data-go="file">Attach a page</button><button class="menu-act" type="button" data-go="share" ${activeJob?.status === 'done' ? '' : 'disabled'}>Share a dev link</button><button class="menu-act" type="button" data-go="download" ${activeJob?.status === 'done' ? '' : 'disabled'}>Download</button><button class="menu-act" type="button" data-go="reload" ${activeJob?.status === 'done' ? '' : 'disabled'}>Reload preview</button>`, e.currentTarget, true);
   const field = document.getElementById('scanUrl');
   document.getElementById('scanUrlForm')?.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -2808,7 +2808,7 @@ function openPlus(e) {
 }
 
 function openDevice(e) {
-  const laid = `The frame is ${deviceLabel()} pixels wide. Zoom sits next to Desktop, Tablet, and Phone. Chrome hides the black island.`;
+  const laid = `${deviceLabel()} wide.`;
   showPop(`<h3>${esc(deviceLabel())}</h3><p class="menu-note">${laid}</p><button class="menu-act" type="button" data-go="fit">Fit the preview</button><button class="menu-act" type="button" data-go="open" ${activeJob?.status === 'done' ? '' : 'disabled'}>Open ${activeJob ? esc(siteSlug(activeJob)) : 'the preview'}</button>`, e.currentTarget);
   wirePop({
     fit: () => {
