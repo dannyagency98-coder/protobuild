@@ -515,7 +515,10 @@ export async function captureInBrowser(env, job) {
       } catch { /* one face can fail */ }
     }
     if (savedFonts.length && !html.includes('data-proto-font')) {
-      const faces = savedFonts.map((face) => `@font-face{font-family:"${face.family}";src:url("assets/${face.file}") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}`).join('');
+      const faces = savedFonts.map((face) => {
+        const weight = /bold/i.test(face.family) ? '700' : /semibold|medium/i.test(face.family) ? '600' : '400';
+        return `@font-face{font-family:"${face.family}";src:url("assets/${face.file}") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`;
+      }).join('');
       html = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `<style data-proto-font>${faces}</style></head>`) : `<style data-proto-font>${faces}</style>${html}`;
     }
     let images = [];
