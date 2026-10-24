@@ -141,7 +141,7 @@ async function injectBrandFonts(env, html, pageUrl) {
     const family = file.replace(/\.woff2?$/i, '').replace(/[^a-z0-9_-]+/gi, '');
     if (!family) continue;
     const format = /\.woff2$/i.test(file) ? 'woff2' : 'woff';
-    const weight = /bold/i.test(family) ? '700' : /semibold|medium/i.test(family) ? '600' : '400';
+    const weight = /semibold|medium/i.test(family) ? '600' : /bold/i.test(family) ? '700' : '400';
     const href = new URL(`/preview/${jobId}/assets/${file}`, pageUrl).href;
     faces.push(`@font-face{font-family:"${family}";src:url("${href}") format("${format}");font-weight:${weight};font-style:normal;font-display:swap}`);
   }
