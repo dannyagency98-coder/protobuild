@@ -763,6 +763,9 @@ html[data-history="off"] #splitSide {
   font-size: 0.92rem;
   line-height: 1.35;
 }
+#captureSteps[hidden],
+#emptyFail[hidden],
+.scan-line[hidden] { display: none !important; }
 .live .scan-line { justify-content: flex-start; max-width: none; font-size: 0.86rem; }
 .scan-line .spin {
   width: 10px;
@@ -1632,24 +1635,6 @@ html[data-history="off"] #splitSide {
 .desktop-only,
 .mobile-bar,
 .drawer-backdrop { display: none; }
-@media (max-width: 1099px) {
-  .desktop-only {
-    display: flex;
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    align-items: center;
-    justify-content: center;
-    padding: 32px 24px;
-    background: #0e0e0e;
-    color: #ededed;
-    text-align: center;
-  }
-  .desktop-only h1 { margin: 0 0 8px; font-size: 1.25rem; font-weight: 560; letter-spacing: -0.03em; }
-  .desktop-only p { margin: 0 auto; max-width: 280px; color: #8d8d8d; font-size: 0.9rem; line-height: 1.45; }
-  .app, .settings-shell, .auth-gate, .secure-screen, .prep-screen, .rights, .confirm { display: none !important; }
-}
-
 @media (max-width: 1099px) {
   html, body { height: 100%; overflow: hidden; }
   .split { display: none !important; }

@@ -93,11 +93,23 @@ function screenshotPage() {
 async function settleImages(page) {
   return page.evaluate(async () => {
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    for (let i = 0; i < 3; i += 1) {
+    const accept = [...document.querySelectorAll('button, a, [role="button"]')].find((el) => {
+      const label = (el.innerText || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      return label.length > 1 && label.length < 48 && /accept all|accept|agree|allow all|accetta|aceptar|akzeptieren|tout accepter|i agree/i.test(label);
+    });
+    if (accept) {
+      accept.click();
+      await wait(400);
+    }
+    for (let i = 0; i < 5; i += 1) {
       window.scrollBy(0, window.innerHeight * 0.9);
-      await wait(180);
+      await wait(220);
     }
     window.scrollTo(0, 0);
+    await Promise.race([
+      document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve(),
+      wait(1200),
+    ]);
     const pick = (srcset) => {
       let best = '';
       let gap = Infinity;
@@ -121,18 +133,22 @@ async function settleImages(page) {
       if (full && /^https?:/i.test(full)) found.push(full);
     };
     document.querySelectorAll('video').forEach((video) => {
-      const source = video.querySelector('source');
-      const chosen = abs(video.currentSrc)
+      const sources = [...video.querySelectorAll('source')];
+      let chosen = abs(video.currentSrc)
         || abs(video.getAttribute('src'))
-        || abs(source && (source.getAttribute('src') || source.getAttribute('data-src')))
-        || abs(video.getAttribute('data-src'));
+        || abs(video.getAttribute('data-src'))
+        || abs(video.getAttribute('data-video-src'));
+      for (const source of sources) {
+        const src = abs(source.getAttribute('src') || source.getAttribute('data-src'));
+        if (src) source.setAttribute('src', src);
+        if (!chosen && src) chosen = src;
+      }
       if (chosen) {
         video.setAttribute('src', chosen);
         video.setAttribute('muted', '');
         video.setAttribute('autoplay', '');
         video.setAttribute('loop', '');
         video.setAttribute('playsinline', '');
-        push(chosen);
       }
       const poster = abs(video.getAttribute('poster') || video.getAttribute('data-poster'));
       if (poster) {
@@ -210,9 +226,9 @@ async function collectFace(page) {
       }
     }
     return {
-      sheets: [...new Set(sheets)].slice(0, 4),
-      fonts: [...new Set(fonts)].slice(0, 8),
-      icons: [...new Set(icons)].slice(0, 8),
+      sheets: [...new Set(sheets)].slice(0, 8),
+      fonts: [...new Set(fonts)].slice(0, 16),
+      icons: [...new Set(icons)].slice(0, 12),
     };
   }).catch(() => ({ sheets: [], fonts: [], icons: [] }));
 }
@@ -226,13 +242,13 @@ async function mirrorAssets(env, job, html, urls, extras) {
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     unique.push(url);
-    if (unique.length >= 16) break;
+    if (unique.length >= 24) break;
   }
   const fontUrls = [];
   for (const url of extras?.fonts || []) {
     if (/^https?:\/\//i.test(url) && !seen.has(url)) fontUrls.push(url);
   }
-  const sheetUrls = (extras?.sheets || []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 4);
+  const sheetUrls = (extras?.sheets || []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 8);
   let totalCount = Math.max(1, unique.length + fontUrls.length + sheetUrls.length);
   let done = 0;
   let aborted = false;
@@ -292,6 +308,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
   await Promise.all([pull(), pull(), pull(), pull()]);
   let css = '';
   const fontAliases = new Map();
+  const cssAssets = [];
   for (const sheetUrl of sheetUrls) {
     try {
       const res = await fetch(sheetUrl, {
@@ -304,15 +321,23 @@ async function mirrorAssets(env, job, html, urls, extras) {
         css += `\n${text}`;
         const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
         let match;
-        while ((match = re.exec(text)) && fontUrls.length < 8) {
-          if (!/\.(woff2?|ttf|otf)(\?|$)/i.test(match[2])) continue;
+        while ((match = re.exec(text))) {
+          const isFont = /\.(woff2?|ttf|otf)(\?|$)/i.test(match[2]);
+          const isIcon = /\.(svg|png|jpe?g|webp|gif|avif)(\?|$)/i.test(match[2]);
+          if (!isFont && !isIcon) continue;
+          if (isFont && fontUrls.length >= 16) continue;
+          if (isIcon && cssAssets.length >= 12) continue;
           try {
             const full = new URL(match[2], sheetUrl).href;
-            if (!fontUrls.includes(full)) fontUrls.push(full);
-            const aliases = fontAliases.get(full) || [];
-            aliases.push(match[2], full);
-            fontAliases.set(full, aliases);
-          } catch { /* skip a bad font url */ }
+            if (isFont) {
+              if (!fontUrls.includes(full)) fontUrls.push(full);
+              const aliases = fontAliases.get(full) || [];
+              aliases.push(match[2], full);
+              fontAliases.set(full, aliases);
+            } else if (!cssAssets.some((item) => item.url === full)) {
+              cssAssets.push({ url: full, alias: match[2] });
+            }
+          } catch { /* skip a bad asset url */ }
         }
       }
     } catch { /* one stylesheet can fail */ }
@@ -346,13 +371,43 @@ async function mirrorAssets(env, job, html, urls, extras) {
     }
   }
   await Promise.all([pullFont(), pullFont()]);
+  let cssCursor = 0;
+  const cssPairs = [];
+  async function pullCssAsset() {
+    while (cssCursor < cssAssets.length && !aborted) {
+      const index = cssCursor;
+      const item = cssAssets[cssCursor];
+      cssCursor += 1;
+      try {
+        const res = await fetch(item.url, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(6000),
+          headers: { 'User-Agent': PHONE_UA, Referer: referer || item.url, Accept: 'image/avif,image/webp,image/*,*/*;q=0.8' },
+        });
+        if (!res.ok) continue;
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const kind = imageFile(buf, res.headers.get('content-type') || '');
+        if (!kind || buf.length < 40 || buf.length > 900000 || total + buf.length > 6000000) continue;
+        total += buf.length;
+        const filename = `css-${index}${kind.ext}`;
+        await env.R2.put(`sites/${jobId}/assets/${filename}`, buf, { httpMetadata: { contentType: kind.type } });
+        pairs.push({ from: item.url, to: `assets/${filename}` });
+        pairs.push({ from: item.alias, to: `assets/${filename}` });
+        cssPairs.push({ from: item.url, to: filename, aliases: [item.alias, item.url] });
+        files.push({ name: `assets/${filename}`, data: buf });
+      } catch { /* one icon can fail */ }
+    }
+  }
+  await Promise.all([pullCssAsset(), pullCssAsset()]);
   let next = rewriteMirrored(html, pairs);
-  if (css && fontPairs.length) {
+  if (css && (fontPairs.length || cssPairs.length)) {
     let localCss = css;
-    for (const pair of fontPairs) {
-      for (const alias of pair.aliases || [pair.from]) {
+    for (const pair of [...fontPairs, ...cssPairs]) {
+      const aliases = pair.aliases || [pair.from];
+      for (const alias of aliases) {
+        if (!alias) continue;
         localCss = localCss.split(alias).join(pair.to);
-        localCss = localCss.split(alias.replace(/&/g, '&amp;')).join(pair.to);
+        localCss = localCss.split(String(alias).replace(/&/g, '&amp;')).join(pair.to);
       }
     }
     const saved = new TextEncoder().encode(localCss.slice(0, 500000));
@@ -381,12 +436,12 @@ export async function captureInBrowser(env, job) {
     const page = await browser.newPage();
     await page.setUserAgent(PHONE_UA);
     await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-    await page.goto(job.source_url, { waitUntil: 'domcontentloaded', timeout: 22000 });
+    await page.goto(job.source_url, { waitUntil: 'domcontentloaded', timeout: 28000 });
     await page.evaluate(() => new Promise((resolve) => {
       const done = () => resolve();
-      if (document.readyState === 'complete') setTimeout(done, 600);
-      else window.addEventListener('load', () => setTimeout(done, 600), { once: true });
-      setTimeout(done, 4000);
+      if (document.readyState === 'complete') setTimeout(done, 800);
+      else window.addEventListener('load', () => setTimeout(done, 800), { once: true });
+      setTimeout(done, 6000);
     })).catch(() => {});
     const urls = await settleImages(page);
     const extras = await collectFace(page);
@@ -394,10 +449,11 @@ export async function captureInBrowser(env, job) {
     const raw = await page.content();
     await browser.close();
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    let html = text.length > 80 ? preparePage(raw, job.source_url) : screenshotPage();
+    const rich = /<(img|video|source|link)\b/i.test(raw);
+    let html = (text.length > 40 || rich) ? preparePage(raw, job.source_url) : screenshotPage();
     let images = [];
     let files = [];
-    if (text.length > 80) {
+    if (text.length > 40 || rich) {
       try {
         const mirrored = await mirrorAssets(env, job, html, urls, extras);
         if (mirrored.aborted) return;
@@ -420,6 +476,13 @@ export async function captureInBrowser(env, job) {
         httpMetadata: { contentType: 'application/json' },
       });
     }
+    const ready = await saveJob(env, {
+      ...job,
+      status: 'running',
+      phase: 'packaging',
+      phaseDetail: 'Previewing the screen',
+    });
+    if (!ready) return;
     const zip = zipStore([
       { name: 'index.html', data: new TextEncoder().encode(html) },
       { name: 'screenshots/phone.png', data: shot },

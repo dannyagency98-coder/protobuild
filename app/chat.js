@@ -472,7 +472,17 @@ function setPane(name) {
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
   });
+  try {
+    if (/^[a-f0-9]{8}$/.test(chatId)) sessionStorage.setItem('pb-pane:' + chatId, preview ? 'preview' : 'chat');
+  } catch { /* the pane still changes for this visit */ }
   if (preview) requestAnimationFrame(fitPhone);
+}
+
+function restorePane() {
+  if (!isNarrow()) return;
+  let pane = 'chat';
+  try { pane = sessionStorage.getItem('pb-pane:' + chatId) || 'chat'; } catch { pane = 'chat'; }
+  setPane(pane === 'preview' ? 'preview' : 'chat');
 }
 
 let previewShownFor = '';
@@ -974,15 +984,10 @@ function formatElapsed(from) {
   return `${mins}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-function remainSeconds(job) {
+function elapsedLabel(job) {
   const start = Date.parse(job?.created_at || '');
-  const gone = Number.isFinite(start) ? Math.floor((Date.now() - start) / 1000) : 0;
-  return Math.max(0, 45 - gone);
-}
-
-function remainLabel(job) {
-  const left = remainSeconds(job);
-  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  const secs = Number.isFinite(start) ? Math.max(0, Math.floor((Date.now() - start) / 1000)) : 0;
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
 
 function paintClock() {
@@ -993,9 +998,8 @@ function paintClock() {
   const clock = document.getElementById('captureClock');
   if (clock) {
     clock.hidden = !scanning;
-    clock.textContent = scanning ? remainLabel(activeJob) : '';
+    clock.textContent = scanning ? elapsedLabel(activeJob) : '';
   }
-  if (scanning && remainSeconds(activeJob) <= 0) haltScan(activeJob);
 }
 
 let sendToken = 0;
@@ -1129,7 +1133,7 @@ function showStage(job, opts = {}) {
     const next = previewAddress(job, opts.reload);
     if (opts.reload || frame.getAttribute('src') !== next) frame.src = next;
     frame.classList.remove('hidden');
-    empty?.classList.toggle('hidden', !editing && !(job.status === 'queued' || job.status === 'running'));
+    empty?.classList.toggle('hidden', !editing);
     empty?.classList.toggle('veil', !!editing);
   } else {
     frame.classList.add('hidden');
@@ -1160,7 +1164,7 @@ function showStage(job, opts = {}) {
   if (chatTitle) chatTitle.textContent = name;
   const mobileTitle = document.getElementById('mobileTitle');
   if (mobileTitle) mobileTitle.textContent = name;
-  if (isNarrow() && job.status === 'done' && previewShownFor !== job.id) {
+  if (!opts.keepPane && isNarrow() && opts.reveal && job.status === 'done' && previewShownFor !== job.id) {
     previewShownFor = job.id;
     setPane('preview');
   }
@@ -1206,7 +1210,7 @@ function paintStageEmpty(job) {
   if (steps) {
     steps.hidden = !(scanning || editing);
     const line = document.getElementById('captureLine');
-    if (line && (scanning || editing)) line.textContent = scanning ? progressLabel(job) : 'Editing the screen';
+    if (line) line.textContent = scanning ? progressLabel(job) : (editing ? 'Editing the screen' : '');
   }
   if (fail) {
     fail.hidden = !bad;
@@ -1256,7 +1260,8 @@ function renderHistory() {
       btn.type = 'button';
       btn.className = 'h-item' + (activeJob?.id === job.id ? ' active' : '');
       btn.dataset.id = job.id;
-      const host = siteSlug(job);
+      const savedTitle = savedThread(job.id).find((item) => item && item.role === 'user' && item.text);
+      const host = savedTitle ? String(savedTitle.text).trim().slice(0, 48) : siteSlug(job);
       const word = job.status === 'done' ? 'Done' : (job.status === 'failed' ? 'Failed' : (job.status === 'blocked' ? 'Blocked' : (job.status === 'queued' ? 'Queued' : 'Running')));
       const dot = job.status === 'done' ? 'ok' : (job.status === 'failed' || job.status === 'blocked' ? 'bad' : 'wait');
       btn.innerHTML = `<span class="dot ${dot}"></span><span class="h-copy"><span class="h-host">${esc(host === 'page' ? 'Uploaded file' : host)}</span><span class="h-meta">${esc(word)} · ${esc(relativeTime(job.created_at))}</span></span>`;
@@ -1362,7 +1367,8 @@ async function openJob(id) {
   }
   if (box && job.status === 'done') box.insertAdjacentHTML('beforeend', previewCard(job));
   if (box) wireCard(box, job);
-  showStage(job);
+  showStage(job, { keepPane: true });
+  if (isNarrow()) restorePane();
   stickThread(true);
   refreshJobs();
   setSendMode(jobLive(job));
@@ -1591,10 +1597,6 @@ async function poll(id, box) {
     try { job = await api('/api/jobs/' + encodeURIComponent(id)); }
     catch { return; }
     if (mine !== pollGen || activeJob?.id !== id) return;
-    if (jobLive(job) && remainSeconds(job) <= 0) {
-      haltScan(job);
-      return;
-    }
     activeJob = job;
     let status = box.querySelector('[data-status]');
     if (!status) {
@@ -1614,6 +1616,13 @@ async function poll(id, box) {
       return;
     }
     if (job.status === 'done') {
+      box.querySelector('.live')?.remove();
+      if (/previewing the screen/i.test(box.textContent || '') && !box.querySelector('.preview-card')) {
+        const line = statusLine(job);
+        const last = [...thread].reverse().find((item) => item.role === 'ai');
+        if (last) last.text = line;
+        box.textContent = line;
+      }
       requestLine(box, job);
       maybeChime(job);
     } else if (job.status === 'failed' || job.status === 'blocked') {
@@ -1631,12 +1640,14 @@ async function poll(id, box) {
         deliverOnDone.delete(job.id);
         deliver(job, kind);
       }
-      showStage(job);
+      showStage(job, { reveal: true });
       stickThread(false);
       refreshJobs();
+      saveSession();
       return;
     }
     showStage(job);
+    saveSession();
     if (job.status === 'failed' || job.status === 'blocked') {
       if (!/stopped/i.test(job.error || '')) {
         showRetry(box);
@@ -3330,7 +3341,8 @@ async function restoreSession(forcedId) {
     const job = await api('/api/jobs/' + encodeURIComponent(saved.jobId));
     activeJob = job;
     try { localStorage.setItem(chatMapKey(job.id), chatId); } catch {}
-    showStage(job);
+    showStage(job, { keepPane: true });
+    if (isNarrow()) restorePane();
     setSendMode(jobLive(job));
     saveSession();
     if (jobLive(job)) {
