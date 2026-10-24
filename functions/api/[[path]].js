@@ -626,15 +626,29 @@ async function jobImages(env, user, jobId, showSmall) {
   const html = page ? await page.text() : '';
   const onPage = html ? imagesInPage(html) : [];
   if (onPage.length) {
-    const images = onPage.map((src) => ({
-      url: src,
-      local: src.split('/').pop().split('?')[0] || 'image',
-      src,
-      size: 0,
-      contentType: 'image/jpeg',
-      kind: 'photo',
-      small: false,
-    }));
+    const images = [];
+    const seen = new Set();
+    for (const src of onPage) {
+      const saved = savedImage(src, man.images || []);
+      if (saved && !showSmall && saved.small) continue;
+      const local = saved ? String(saved.local || '').replace(/\\/g, '/') : '';
+      const shown = local
+        ? `/preview/${jobId}/${local}`
+        : /^assets\//i.test(src)
+          ? `/preview/${jobId}/${src}`
+          : src;
+      if (!shown || seen.has(shown)) continue;
+      seen.add(shown);
+      images.push({
+        url: saved?.url || src,
+        local: local || src.split('/').pop().split('?')[0] || 'image',
+        src: shown,
+        size: saved?.size || 0,
+        contentType: saved?.contentType || 'image/jpeg',
+        kind: saved?.kind || 'photo',
+        small: saved ? !!saved.small : false,
+      });
+    }
     return json({ images, imageCount: images.length, skipped: 0, totalMB: man.totalMB, showSmall });
   }
   const seen = new Set();
@@ -652,12 +666,8 @@ async function jobImages(env, user, jobId, showSmall) {
 }
 
 function pageRegion(html) {
-  const main = html.match(/<main\b[^>]*>[\s\S]*?<\/main>/i);
-  if (main && /<img\b/i.test(main[0])) return main[0];
-  return html
-    .replace(/<header\b[^>]*>[\s\S]*?<\/header>/gi, '')
+  return String(html || '')
     .replace(/<nav\b[^>]*>[\s\S]*?<\/nav>/gi, '')
-    .replace(/<footer\b[^>]*>[\s\S]*?<\/footer>/gi, '')
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 }
 
@@ -670,22 +680,38 @@ function shotKey(src) {
     .replace(/\.(jpe?g|png|webp|avif)$/, '');
 }
 
+function savedImage(src, images) {
+  const bare = String(src || '').split('?')[0];
+  return (images || []).find((img) => {
+    const local = String(img.local || '').replace(/\\/g, '/');
+    const url = String(img.url || '');
+    return url === src || url.split('?')[0] === bare || local === src || src.endsWith(`/${local}`);
+  }) || null;
+}
+
+function listedSrc(src) {
+  if (!src || /^(data:|blob:|javascript:)/i.test(src)) return '';
+  if (/^https?:\/\//i.test(src) || /^assets\//i.test(src)) return src;
+  return '';
+}
+
 function imagesInPage(html) {
   const region = pageRegion(html);
   const tags = [
     ...region.matchAll(/<img\b[^>]*>/gi),
     ...region.matchAll(/<source\b[^>]*>/gi),
+    ...region.matchAll(/<video\b[^>]*>/gi),
   ];
   const found = [];
   const seen = new Set();
   const keys = new Set();
   for (const match of tags) {
-    if (found.length >= 24) break;
+    if (found.length >= 60) break;
     const tag = match[0];
-    const src = (tag.match(/\s(?:src|data-src)=["']([^"']+)["']/i) || [])[1]
-      || (tag.match(/\s(?:srcset|data-srcset)=["']([^"'\s,]+)/i) || [])[1];
-    if (!src || !/^https?:\/\//i.test(src) || seen.has(src)) continue;
-    if (/\.svg(\?|$)/i.test(src) || /logo|sprite|icon|pixel|spacer|badge|favicon|tracking|analytics|placeholder|navigation-menu|nav-tile/i.test(src)) continue;
+    const src = listedSrc((tag.match(/\s(?:src|data-src|poster)=["']([^"']+)["']/i) || [])[1]
+      || (tag.match(/\s(?:srcset|data-srcset)=["']([^"'\s,]+)/i) || [])[1]);
+    if (!src || seen.has(src)) continue;
+    if (/\.svg(\?|$)/i.test(src) || /pixel|spacer|badge|favicon|tracking|analytics|placeholder|navigation-menu|nav-tile/i.test(src)) continue;
     const key = shotKey(src);
     if (keys.has(key)) continue;
     seen.add(src);

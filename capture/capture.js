@@ -566,8 +566,9 @@ async function main() {
       const isAsset = isImage || ct.includes('css') || ct.includes('font') || ct.includes('woff') || /\.(css|woff2?|ttf)(\?|$)/i.test(pathName);
       if (!isAsset) return;
       if (MODE === 'images' && !isImage) return;
-      if (isImage && images.length >= 20) return;
       const declared = Number(response.headers()['content-length'] || 0);
+      if (isImage && declared && declared < 150) return;
+      if (isImage && images.length >= 48) return;
       if (declared > 1500000) return;
       const buf = await response.body().catch(() => null);
       if (!buf || !buf.length) return;
@@ -795,10 +796,10 @@ async function main() {
         let match;
         while ((match = re.exec(style))) add(match[2], /\.svg($|\?)/i.test(match[2]));
       });
-      return { photos: [...new Set(photos)].slice(0, 16), icons: [...new Set(icons)].slice(0, 16) };
+      return { photos: [...new Set(photos)].slice(0, 40), icons: [...new Set(icons)].slice(0, 24) };
     }).catch(() => ({ photos: [], icons: [] }));
 
-    const assetCap = Date.now() - started > 12000 ? 4 : 8;
+    const assetCap = Date.now() - started > 20000 ? 12 : 36;
     note('saving', `Copying ${assetCap} images and icons`);
     const pendingAssets = [...(pageAssets.icons || []), ...(pageAssets.photos || [])]
       .filter((assetUrl) => assetUrl && !resourceMap.has(assetUrl))
@@ -944,7 +945,7 @@ async function main() {
           img.setAttribute('loading', 'eager');
         });
         document.querySelectorAll('source').forEach((el) => el.removeAttribute('srcset'));
-        return [...new Set(chosen)].slice(0, 12);
+        return [...new Set(chosen)].slice(0, 40);
       }).catch(() => []);
       let slot = 0;
       await Promise.all(Array.from({ length: 3 }, async () => {

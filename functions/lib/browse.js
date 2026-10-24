@@ -92,6 +92,67 @@ function screenshotPage() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#fff}img{width:100%;height:auto;display:block}</style></head><body><img src="screenshots/phone.png" alt=""></body></html>`;
 }
 
+function decode64(value) {
+  const binary = atob(value);
+  const buf = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) buf[i] = binary.charCodeAt(i);
+  return buf;
+}
+
+async function keepImages(page) {
+  const ids = new Map();
+  const asked = new Map();
+  let session = null;
+  try {
+    session = await page.createCDPSession();
+    await session.send('Network.enable');
+    session.on('Network.requestWillBeSent', (event) => {
+      const url = event.request && event.request.url;
+      if (url) asked.set(event.requestId, url);
+    });
+    session.on('Network.responseReceived', (event) => {
+      const mime = String(event.response && event.response.mimeType || '');
+      const url = String(event.response && event.response.url || '');
+      if (!mime.startsWith('image/') && !/\.(png|jpe?g|gif|webp|avif|svg)(\?|$)/i.test(url)) return;
+      if (url && !ids.has(url)) ids.set(url, event.requestId);
+      const bare = url.split('?')[0];
+      if (bare && !ids.has(bare)) ids.set(bare, event.requestId);
+      const requested = asked.get(event.requestId);
+      if (requested && !ids.has(requested)) ids.set(requested, event.requestId);
+    });
+  } catch { session = null; }
+  return {
+    async take(urls) {
+      const saved = new Map();
+      if (!session) return saved;
+      const list = [...new Set(urls || [])].filter((url) => /^https?:/i.test(url)).slice(0, 48);
+      let total = 0;
+      let cursor = 0;
+      async function pull() {
+        while (cursor < list.length) {
+          const url = list[cursor];
+          cursor += 1;
+          if (saved.has(url) || total > 8000000) continue;
+          const id = ids.get(url) || ids.get(String(url).split('?')[0]);
+          if (!id) continue;
+          try {
+            const result = await session.send('Network.getResponseBody', { requestId: id });
+            const buf = result.base64Encoded ? decode64(result.body || '') : new TextEncoder().encode(result.body || '');
+            const kind = imageFile(buf, '');
+            if (!kind || buf.length < 80 || buf.length > 1500000 || total + buf.length > 8000000) continue;
+            total += buf.length;
+            const rec = { buf, type: kind.type, ext: kind.ext };
+            saved.set(url, rec);
+            saved.set(String(url).split('?')[0], rec);
+          } catch { /* this picture stays on the original host */ }
+        }
+      }
+      await Promise.all([pull(), pull(), pull(), pull()]);
+      return saved;
+    },
+  };
+}
+
 async function settleImages(page) {
   return page.evaluate(async () => {
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,9 +172,15 @@ async function settleImages(page) {
       accept.click();
       await wait(150);
     }
-    for (let i = 0; i < 2; i += 1) {
-      window.scrollBy(0, window.innerHeight * 0.9);
-      await wait(120);
+    let lastHeight = 0;
+    for (let i = 0; i < 8; i += 1) {
+      const height = (document.scrollingElement || document.documentElement).scrollHeight || 0;
+      window.scrollBy(0, Math.max(window.innerHeight * 0.85, 400));
+      await wait(160);
+      const box = document.scrollingElement || document.documentElement;
+      if (box && box.scrollTop + window.innerHeight >= height - 40) break;
+      if (height && height === lastHeight && i > 2) break;
+      lastHeight = height;
     }
     window.scrollTo(0, 0);
     await Promise.race([
@@ -137,10 +204,14 @@ async function settleImages(page) {
       if (!value || /^(data:|blob:|javascript:)/i.test(value)) return '';
       try { return new URL(value, location.href).href; } catch { return ''; }
     };
-    const found = [];
-    const push = (value) => {
+    const content = [];
+    const chrome = [];
+    const push = (value, el) => {
       const full = abs(value);
-      if (full && /^https?:/i.test(full)) found.push(full);
+      if (!full || !/^https?:/i.test(full)) return;
+      if (/\.svg(\?|$)/i.test(full) || /pixel|spacer|tracking|analytics|placeholder|1x1/i.test(full)) return;
+      const inChrome = el && el.closest && el.closest('nav, footer, [role="navigation"]');
+      (inChrome ? chrome : content).push(full);
     };
     document.querySelectorAll('video').forEach((video) => {
       const sources = [...video.querySelectorAll('source')];
@@ -163,7 +234,7 @@ async function settleImages(page) {
       const poster = abs(video.getAttribute('poster') || video.getAttribute('data-poster'));
       if (poster) {
         video.setAttribute('poster', poster);
-        push(poster);
+        push(poster, video);
       }
     });
     document.querySelectorAll('img').forEach((img) => {
@@ -178,7 +249,7 @@ async function settleImages(page) {
         || abs(img.getAttribute('src'));
       if (chosen) {
         img.setAttribute('src', chosen);
-        push(chosen);
+        push(chosen, img);
       }
       img.removeAttribute('srcset');
       img.setAttribute('loading', 'eager');
@@ -189,12 +260,13 @@ async function settleImages(page) {
       const next = style.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (all, quote, val) => {
         const full = abs(val);
         if (!full) return all;
-        push(full);
+        push(full, el);
         return `url("${full}")`;
       });
       if (next !== style) el.setAttribute('style', next);
     });
-    return [...new Set(found)].slice(0, 24);
+    await wait(400);
+    return [...new Set(content)].slice(0, 40).concat([...new Set(chrome)].slice(0, 8));
   }).catch(() => []);
 }
 
@@ -289,7 +361,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     unique.push(url);
-    if (unique.length >= 12) break;
+    if (unique.length >= 40) break;
   }
   const fontUrls = [];
   for (const url of extras?.fonts || []) {
@@ -333,8 +405,8 @@ async function mirrorAssets(env, job, html, urls, extras) {
         if (!res.ok) continue;
         const buf = new Uint8Array(await res.arrayBuffer());
         const kind = imageFile(buf, res.headers.get('content-type') || '');
-        if (!kind || buf.length < 40 || buf.length > 900000) continue;
-        if (total + buf.length > 6000000) return;
+        if (!kind || buf.length < 40 || buf.length > 1500000) continue;
+        if (total + buf.length > 8000000) return;
         total += buf.length;
         const name = `assets/img-${index}${kind.ext}`;
         await env.R2.put(`sites/${jobId}/${name}`, buf, { httpMetadata: { contentType: kind.type } });
@@ -373,7 +445,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
           const isIcon = /\.(svg|png|jpe?g|webp|gif|avif)(\?|$)/i.test(match[2]);
           if (!isFont && !isIcon) continue;
           if (isFont && fontUrls.length >= 6) continue;
-          if (isIcon && cssAssets.length >= 4) continue;
+          if (isIcon && cssAssets.length >= 16) continue;
           try {
             const full = new URL(match[2], sheetUrl).href;
             if (isFont) {
@@ -407,7 +479,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
         if (!res.ok) continue;
         const buf = new Uint8Array(await res.arrayBuffer());
         const kind = fontFile(res.headers.get('content-type') || '', url);
-        if (!kind || buf.length < 40 || buf.length > 900000 || total + buf.length > 6000000) continue;
+        if (!kind || buf.length < 40 || buf.length > 1500000 || total + buf.length > 8000000) continue;
         total += buf.length;
         const filename = `font-${index}${kind.ext}`;
         await env.R2.put(`sites/${jobId}/assets/${filename}`, buf, { httpMetadata: { contentType: kind.type } });
@@ -434,7 +506,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
         if (!res.ok) continue;
         const buf = new Uint8Array(await res.arrayBuffer());
         const kind = imageFile(buf, res.headers.get('content-type') || '');
-        if (!kind || buf.length < 40 || buf.length > 900000 || total + buf.length > 6000000) continue;
+        if (!kind || buf.length < 40 || buf.length > 1500000 || total + buf.length > 8000000) continue;
         total += buf.length;
         const filename = `css-${index}${kind.ext}`;
         await env.R2.put(`sites/${jobId}/assets/${filename}`, buf, { httpMetadata: { contentType: kind.type } });
@@ -478,10 +550,48 @@ async function saveJob(env, job) {
   return true;
 }
 
+async function putKept(env, jobId, kept, urls) {
+  const images = [];
+  const pairs = [];
+  const used = new Set();
+  const pending = [];
+  for (const url of [...new Set(urls || [])]) {
+    const rec = kept.get(url) || kept.get(String(url).split('?')[0]);
+    if (!rec || used.has(rec)) continue;
+    used.add(rec);
+    const name = `assets/img-${pending.length}${rec.ext}`;
+    pending.push({ url, rec, name });
+  }
+  let cursor = 0;
+  async function write() {
+    while (cursor < pending.length) {
+      const item = pending[cursor];
+      cursor += 1;
+      try {
+        await env.R2.put(`sites/${jobId}/${item.name}`, item.rec.buf, { httpMetadata: { contentType: item.rec.type } });
+        pairs.push({ from: item.url, to: item.name });
+        const bare = String(item.url).split('?')[0];
+        if (bare !== item.url) pairs.push({ from: bare, to: item.name });
+        images.push({
+          url: item.url,
+          local: item.name,
+          size: item.rec.buf.length,
+          contentType: item.rec.type,
+          kind: item.rec.buf.length < 8000 || item.rec.ext === '.svg' ? 'icon' : 'photo',
+          small: item.rec.buf.length < 8000,
+        });
+      } catch { /* one saved image can fail */ }
+    }
+  }
+  await Promise.all([write(), write(), write(), write(), write(), write()]);
+  return { images, pairs };
+}
+
 export async function captureInBrowser(env, job) {
   const browser = await puppeteer.launch(env.BROWSER);
   try {
     const page = await browser.newPage();
+    const sink = await keepImages(page);
     await page.setUserAgent(PHONE_UA);
     await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
     const opened = await page.goto(job.source_url, { waitUntil: 'domcontentloaded', timeout: 25000 }).then(() => true).catch(() => false);
@@ -497,6 +607,7 @@ export async function captureInBrowser(env, job) {
     const shot = new Uint8Array(await page.screenshot({ type: 'png' }).catch(() => new Uint8Array()));
     const raw = await page.content().catch(() => '');
     const brandFonts = await grabFonts(page).catch(() => []);
+    const kept = await sink.take(urls).catch(() => new Map());
     await browser.close();
     const stoppedNow = async () => {
       const prior = await env.R2.get(`sites/${job.id}/job.json`);
@@ -531,6 +642,11 @@ export async function captureInBrowser(env, job) {
     let images = [];
     let files = [];
     if (await stoppedNow()) return;
+    const stored = await putKept(env, job.id, kept, urls).catch(() => ({ images: [], pairs: [] }));
+    if (stored.pairs && stored.pairs.length) html = rewriteMirrored(html, stored.pairs);
+    images = stored.images || [];
+    const savedUrls = new Set(images.flatMap((img) => [img.url, String(img.url).split('?')[0]]));
+    const missing = (urls || []).filter((url) => !savedUrls.has(url));
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
     });
@@ -546,15 +662,19 @@ export async function captureInBrowser(env, job) {
     if (!ready) return;
     files = [{ name: 'screenshots/phone.png', data: shot }];
     for (const face of savedFonts) files.push({ name: `assets/${face.file}`, data: face.data });
+    for (const img of images) {
+      const rec = kept.get(img.url) || kept.get(String(img.url).split('?')[0]);
+      if (rec) files.push({ name: img.local, data: rec.buf });
+    }
     if (text.length > 40 || rich) {
       try {
         const mirrored = await Promise.race([
-          mirrorAssets(env, job, html, urls, extras),
+          mirrorAssets(env, job, html, missing, extras),
           new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
         ]);
         if (mirrored && !mirrored.aborted && mirrored.html && !(await stoppedNow())) {
           html = mirrored.html;
-          images = mirrored.images || [];
+          images = images.concat(mirrored.images || []);
           files = files.concat(mirrored.files || []);
           await env.R2.put(`sites/${job.id}/index.html`, html, {
             httpMetadata: { contentType: 'text/html; charset=utf-8' },
