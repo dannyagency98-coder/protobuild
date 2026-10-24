@@ -1126,15 +1126,14 @@ function showStage(job, opts = {}) {
     paintStageEmpty(job);
   }
   const previewUrl = job.previewUrl || (job.id ? '/preview/' + job.id + '/' : '');
-  const previewReady = job.status === 'done' || job.phase === 'packaging';
-  const editing = screenMode === 'edit' && previewReady;
+  const previewReady = job.status === 'done' || job.phase === 'packaging' || (frame.getAttribute('src') || '').includes(job.id);
   frame.title = siteSlug(job);
   if (previewReady && previewUrl) {
     const next = previewAddress(job, opts.reload);
     if (opts.reload || frame.getAttribute('src') !== next) frame.src = next;
     frame.classList.remove('hidden');
-    empty?.classList.toggle('hidden', !editing);
-    empty?.classList.toggle('veil', !!editing);
+    empty?.classList.add('hidden');
+    empty?.classList.remove('veil');
   } else {
     frame.classList.add('hidden');
     frame.removeAttribute('src');

@@ -22,7 +22,7 @@ const TYPES = {
 
 const PICK = '<script data-proto-stay="1">(function(){function foreign(url){try{return new URL(url,location.href).origin!==location.origin}catch(e){return true}}var pick=false;window.addEventListener("message",function(e){if(!e.data||e.data.type!=="pb-pick")return;pick=!!e.data.on;document.documentElement.style.cursor=pick?"crosshair":""});document.addEventListener("click",function(e){if(pick){e.preventDefault();e.stopPropagation();var el=e.target;if(!el||!el.tagName)return;var cls=typeof el.className==="string"?el.className.trim().split(/\\s+/).filter(Boolean).slice(0,2).join("."):"";var sel=el.id?"#"+el.id:el.tagName.toLowerCase()+(cls?"."+cls:"");var text=(el.innerText||el.getAttribute("alt")||"").replace(/\\s+/g," ").trim().slice(0,180);parent.postMessage({type:"pb-picked",selector:sel,text:text},"*");return}var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&foreign(a.getAttribute("href"))){e.preventDefault();e.stopPropagation()}},true)})();</script>';
 
-const FIT = '<script data-proto-fix="1">(function(){document.body.style.overflow="auto";document.body.style.height="auto";function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}fit();window.addEventListener("load",fit);document.querySelectorAll("video").forEach(function(video){var box=video.getBoundingClientRect();if(box.width<120||box.height<80)return;var still=document.createElement("img");still.src="screenshots/desktop.png";still.alt="";still.style.cssText="width:100%;height:100%;object-fit:cover;object-position:center;display:block";still.addEventListener("error",function(){still.remove()},{once:true});video.replaceWith(still)})})();</script>';
+const FIT = '<script data-proto-fix="1">(function(){document.body.style.overflow="auto";document.body.style.height="auto";function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}fit();window.addEventListener("load",fit);document.querySelectorAll("video").forEach(function(video){video.muted=true;video.playsInline=true;var play=video.play();if(play&&play.catch)play.catch(function(){})})})();</script>';
 
 const CSP = "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: data:; media-src 'self' data: blob: https:; frame-src 'self' https:; frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
 
@@ -101,7 +101,8 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
   const assetRoot = folderUrl(pageUrl);
   const custom = await env.R2.head(`sites/${jobId}/custom.css`);
   if (custom && !/custom\.css/i.test(html)) {
-    const href = assetRoot ? new URL('custom.css', assetRoot).href : `/preview/${jobId}/custom.css`;
+    const stamp = custom.uploaded ? new Date(custom.uploaded).getTime() : Date.now();
+    const href = `${assetRoot ? new URL('custom.css', assetRoot).href : `/preview/${jobId}/custom.css`}?v=${stamp}`;
     html = html.replace(/<\/head>/i, `<link rel="stylesheet" href="${href}"></head>`);
   }
   if (share && !html.includes('Reference prototype')) {

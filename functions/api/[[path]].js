@@ -370,7 +370,6 @@ async function handleAgent(request, env, user, waitUntil) {
   if (!env.R2) return sse({ reply: 'R2 is not bound on this deploy, so the edit cannot be saved.', job: null });
   const job = await loadJob(env, user.id, jobId);
   if (!job) return sse({ reply: 'That capture is gone.', job: null });
-  if (job.status !== 'done') return sse({ reply: 'The page is still copying. I can change it when the preview is ready.', job: publicJob(env, job) });
   const pageObj = await env.R2.get(`sites/${jobId}/index.html`);
   if (!pageObj) return sse({ reply: 'The page is not in storage yet.', job: publicJob(env, job) });
   const page = await pageObj.text();

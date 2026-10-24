@@ -13,9 +13,11 @@ export function applyReplacements(html, list) {
     const from = String(item?.from || '').replace(/\s+/g, ' ').trim().slice(0, 240);
     const to = String(item?.to || '').replace(/\s+/g, ' ').trim().slice(0, 500);
     if (!from || from === to) continue;
-    const re = new RegExp(`(>[^<]{0,400})${escapeRe(from)}`, 'i');
-    if (!re.test(next)) continue;
-    next = next.replace(re, `$1${escapeHtml(to)}`);
+    const pattern = escapeRe(from).replace(/\\?\s+/g, '\\s+');
+    const re = new RegExp(pattern, 'i');
+    if (!re.test(next.replace(/<[^>]+>/g, ' '))) continue;
+    const safe = escapeHtml(to);
+    next = next.replace(/(>[^<]*)/g, (chunk) => chunk.replace(new RegExp(pattern, 'gi'), safe));
     notes.push(`Replaced “${from}” with “${to}”.`);
   }
   return { html: next === html ? '' : next, notes };
