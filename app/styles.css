@@ -1266,6 +1266,24 @@ html[data-history="off"] #splitSide {
   padding: 16px;
   border-radius: 16px;
 }
+.popover.modal {
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  width: min(420px, calc(100vw - 32px));
+  min-width: 0;
+  max-width: 420px;
+  padding: 22px 18px 14px;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%);
+  animation: pop-in 160ms ease;
+  z-index: 90;
+}
+.popover.modal h3 { margin: 0 8px 8px; text-align: center; font-size: 1.05rem; }
+.popover.modal .menu-note { margin: 0 8px 14px; text-align: center; }
+@keyframes pop-in { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
 .popover.wide h3 { margin: 0 4px 8px; font-size: 1rem; }
 .popover.wide .menu-note { margin: 0 4px 12px; font-size: 0.84rem; line-height: 1.45; }
 .popover.wide .menu-act { min-height: 40px; padding: 8px 10px; font-size: 0.92rem; border-radius: 10px; }

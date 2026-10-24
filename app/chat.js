@@ -1640,7 +1640,7 @@ async function poll(id, box) {
         deliverOnDone.delete(job.id);
         deliver(job, kind);
       }
-      showStage(job, { reveal: true });
+      showStage(job, { reveal: true, reload: true });
       stickThread(false);
       refreshJobs();
       saveSession();
@@ -1890,6 +1890,7 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments 
         if (frame) frame.src = data.job.previewUrl + '?t=' + Date.now();
       }
       showStage(data.job, { reload: !!data.edited });
+      if (data.edited) box.dataset.edited = '1';
       if (data.openGallery) {
         setView('images');
         loadGallery(data.job);
@@ -1917,8 +1918,9 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments 
   } finally {
     if (inflight === ctrl) inflight = null;
     if (screenMode) {
+      const refreshPhone = box?.dataset?.edited === '1';
       screenMode = '';
-      if (activeJob) showStage(activeJob);
+      if (activeJob) showStage(activeJob, { reload: refreshPhone });
     }
   }
 }
@@ -2452,7 +2454,7 @@ async function copyText(text, ok = 'Copied.', button) {
 
 function closePop() {
   pop.classList.add('hidden');
-  pop.classList.remove('account-menu');
+  pop.classList.remove('account-menu', 'modal', 'wide');
   syncVeil();
 }
 
@@ -2484,9 +2486,18 @@ function confirmAsk({ title, body, ok = 'Confirm', danger = false }) {
 function showPop(html, anchor, wide) {
   pop.classList.remove('account-menu');
   pop.classList.toggle('wide', !!wide);
+  pop.classList.toggle('modal', !!wide);
   pop.innerHTML = html;
   pop.classList.remove('hidden');
   syncVeil();
+  if (wide) {
+    pop.style.width = '';
+    pop.style.left = '';
+    pop.style.top = '';
+    pop.style.bottom = '';
+    pop.style.transform = '';
+    return;
+  }
   const rect = (anchor || document.getElementById('helpBtn')).getBoundingClientRect();
   const side = document.querySelector('.side').getBoundingClientRect();
   const inSide = rect.left >= side.left - 2 && rect.right <= side.right + 2;
@@ -3411,6 +3422,11 @@ function startWorkspace() {
     if (jobId) {
       addressMode = 'replace';
       return openJob(jobId);
+    }
+    const latest = readStoredSession();
+    if (latest?.chatId && /^[a-f0-9]{8}$/.test(latest.chatId) && Array.isArray(latest.messages) && latest.messages.some((item) => item && item.text)) {
+      addressMode = 'replace';
+      return restoreSession(latest.chatId);
     }
     addressMode = 'replace';
     resetChat();

@@ -423,6 +423,7 @@ async function saveJob(env, job) {
   const existing = await env.R2.get(`sites/${job.id}/job.json`);
   const saved = existing ? await existing.json().catch(() => null) : null;
   if (saved && /stopped/i.test(String(saved.error || ''))) return false;
+  if (saved && saved.status === 'done' && job.status === 'running') return false;
   if (saved && (saved.status === 'failed' || saved.status === 'blocked') && job.status !== 'failed' && job.status !== 'blocked') return false;
   await env.R2.put(`sites/${job.id}/job.json`, JSON.stringify(job), {
     httpMetadata: { contentType: 'application/json' },
@@ -453,29 +454,18 @@ export async function captureInBrowser(env, job) {
     let html = (text.length > 40 || rich) ? preparePage(raw, job.source_url) : screenshotPage();
     let images = [];
     let files = [];
-    if (text.length > 40 || rich) {
-      try {
-        const mirrored = await mirrorAssets(env, job, html, urls, extras);
-        if (mirrored.aborted) return;
-        html = mirrored.html;
-        images = mirrored.images;
-        files = mirrored.files;
-      } catch { /* keep the page even if an image copy fails */ }
-    }
-    const prior = await env.R2.get(`sites/${job.id}/job.json`);
-    const priorJob = prior ? await prior.json().catch(() => null) : null;
-    if (priorJob && /stopped/i.test(String(priorJob.error || ''))) return;
+    const stoppedNow = async () => {
+      const prior = await env.R2.get(`sites/${job.id}/job.json`);
+      const priorJob = prior ? await prior.json().catch(() => null) : null;
+      return !!(priorJob && /stopped/i.test(String(priorJob.error || '')));
+    };
+    if (await stoppedNow()) return;
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
     });
     await env.R2.put(`sites/${job.id}/index.html`, html, {
       httpMetadata: { contentType: 'text/html; charset=utf-8' },
     });
-    if (images.length) {
-      await env.R2.put(`sites/${job.id}/manifest.json`, JSON.stringify({ images, totalMB: Math.round(images.reduce((sum, img) => sum + img.size, 0) / 1048576 * 100) / 100 }), {
-        httpMetadata: { contentType: 'application/json' },
-      });
-    }
     const ready = await saveJob(env, {
       ...job,
       status: 'running',
@@ -483,14 +473,29 @@ export async function captureInBrowser(env, job) {
       phaseDetail: 'Previewing the screen',
     });
     if (!ready) return;
-    const zip = zipStore([
-      { name: 'index.html', data: new TextEncoder().encode(html) },
-      { name: 'screenshots/phone.png', data: shot },
-      ...files,
-    ]);
-    await env.R2.put(`sites/${job.id}/full.zip`, zip, {
-      httpMetadata: { contentType: 'application/zip' },
-    });
+    files = [{ name: 'screenshots/phone.png', data: shot }];
+    if (text.length > 40 || rich) {
+      try {
+        const mirrored = await Promise.race([
+          mirrorAssets(env, job, html, urls, extras),
+          new Promise((resolve) => setTimeout(() => resolve(null), 22000)),
+        ]);
+        if (mirrored && !mirrored.aborted && mirrored.html) {
+          html = mirrored.html;
+          images = mirrored.images || [];
+          files = files.concat(mirrored.files || []);
+          await env.R2.put(`sites/${job.id}/index.html`, html, {
+            httpMetadata: { contentType: 'text/html; charset=utf-8' },
+          });
+        }
+      } catch { /* a large site still keeps the page saved above */ }
+    }
+    if (images.length) {
+      await env.R2.put(`sites/${job.id}/manifest.json`, JSON.stringify({ images, totalMB: Math.round(images.reduce((sum, img) => sum + img.size, 0) / 1048576 * 100) / 100 }), {
+        httpMetadata: { contentType: 'application/json' },
+      }).catch(() => {});
+    }
+    if (await stoppedNow()) return;
     await saveJob(env, {
       ...job,
       status: 'done',
@@ -500,6 +505,15 @@ export async function captureInBrowser(env, job) {
       finished_at: new Date().toISOString(),
       stats: { images: images.length || (shot.length ? 1 : 0) },
     });
+    try {
+      const zip = zipStore([
+        { name: 'index.html', data: new TextEncoder().encode(html) },
+        ...files.filter((file) => file && file.name !== 'index.html'),
+      ]);
+      await env.R2.put(`sites/${job.id}/full.zip`, zip, {
+        httpMetadata: { contentType: 'application/zip' },
+      });
+    } catch { /* the preview is already saved if the zip is too large */ }
     return;
   } finally {
     await browser.close().catch(() => {});
