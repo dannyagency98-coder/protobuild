@@ -132,7 +132,7 @@ const FONT_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWeb
 
 async function injectBrandFonts(env, html, pageUrl) {
   const jobId = (String(pageUrl).match(/\/preview\/([^/]+)/) || [])[1];
-  if (!jobId || !env?.R2 || html.includes('data-proto-font')) return html;
+  if (!jobId || !env?.R2 || html.includes('<style data-proto-font>')) return html;
   const listed = await env.R2.list({ prefix: `sites/${jobId}/assets/` });
   const faces = [];
   for (const obj of listed.objects || []) {
