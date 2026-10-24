@@ -621,8 +621,7 @@ async function jobImages(env, user, jobId, showSmall) {
   if (!job) return json({ error: 'Job not found' }, 404);
   if (!env.R2) return json({ images: [], imageCount: 0, skipped: 0, showSmall });
   const obj = await env.R2.get(`sites/${jobId}/manifest.json`);
-  if (!obj) return json({ images: [], imageCount: 0, skipped: 0, showSmall });
-  const man = await obj.json().catch(() => ({}));
+  const man = obj ? await obj.json().catch(() => ({})) : {};
   const seen = new Set();
   const images = [];
   let skipped = 0;
@@ -632,9 +631,54 @@ async function jobImages(env, user, jobId, showSmall) {
     if (!local || local.includes('..') || seen.has(local)) continue;
     if (!viewableListed(img)) { skipped += 1; continue; }
     seen.add(local);
+    if (img.url) seen.add(img.url);
     images.push({ ...img, local, src: `/preview/${jobId}/${local}` });
   }
+  const page = await env.R2.get(`sites/${jobId}/index.html`);
+  if (page) {
+    const html = await page.text();
+    for (const src of imagesInPage(html)) {
+      if (seen.has(src)) continue;
+      seen.add(src);
+      images.push({
+        url: src,
+        local: src.split('/').pop().split('?')[0] || 'image',
+        src,
+        size: 0,
+        contentType: 'image/jpeg',
+        kind: 'photo',
+        small: false,
+      });
+    }
+  }
+  const shot = await env.R2.head(`sites/${jobId}/screenshots/phone.png`);
+  if (shot && !seen.has('screenshots/phone.png')) {
+    images.unshift({
+      url: '',
+      local: 'screenshots/phone.png',
+      src: `/preview/${jobId}/screenshots/phone.png`,
+      size: shot.size || 0,
+      contentType: 'image/png',
+      kind: 'photo',
+      small: false,
+    });
+  }
   return json({ images, imageCount: images.length, skipped, totalMB: man.totalMB, showSmall });
+}
+
+function imagesInPage(html) {
+  const found = [];
+  const seen = new Set();
+  const re = /<img\b[^>]*\ssrc=["']([^"']+)["']/gi;
+  let match;
+  while ((match = re.exec(html)) && found.length < 48) {
+    const src = match[1];
+    if (!/^https?:\/\//i.test(src) || seen.has(src)) continue;
+    if (/\.svg(\?|$)/i.test(src) || /logo|sprite|icon|pixel|spacer|badge|favicon|tracking|analytics/i.test(src)) continue;
+    seen.add(src);
+    found.push(src);
+  }
+  return found;
 }
 
 async function jobZip(env, user, jobId, type) {

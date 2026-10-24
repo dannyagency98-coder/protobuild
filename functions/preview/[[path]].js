@@ -1,4 +1,4 @@
-import { serveStored } from '../lib/files.js';
+import { proxyRemote, serveStored } from '../lib/files.js';
 
 function safeKey(pathname) {
   const rest = pathname.replace(/^\/preview\/?/, '');
@@ -15,6 +15,8 @@ export async function onRequest(context) {
   const found = safeKey(new URL(request.url).pathname);
   if (!found) return new Response('Not found', { status: 404 });
   const pageUrl = new URL(request.url);
+  const remote = pageUrl.searchParams.get('remote');
+  if (remote) return proxyRemote(env, found.jobId, remote);
   pageUrl.search = '';
   pageUrl.hash = '';
   return serveStored(env, found.jobId, found.file, { share: false, pageUrl: pageUrl.href });

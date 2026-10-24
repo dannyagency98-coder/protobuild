@@ -22,7 +22,7 @@ const TYPES = {
 
 const PICK = '<script data-proto-stay="1">(function(){function foreign(url){try{return new URL(url,location.href).origin!==location.origin}catch(e){return true}}var pick=false;window.addEventListener("message",function(e){if(!e.data||e.data.type!=="pb-pick")return;pick=!!e.data.on;document.documentElement.style.cursor=pick?"crosshair":""});document.addEventListener("click",function(e){if(pick){e.preventDefault();e.stopPropagation();var el=e.target;if(!el||!el.tagName)return;var cls=typeof el.className==="string"?el.className.trim().split(/\\s+/).filter(Boolean).slice(0,2).join("."):"";var sel=el.id?"#"+el.id:el.tagName.toLowerCase()+(cls?"."+cls:"");var text=(el.innerText||el.getAttribute("alt")||"").replace(/\\s+/g," ").trim().slice(0,180);parent.postMessage({type:"pb-picked",selector:sel,text:text},"*");return}var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&foreign(a.getAttribute("href"))){e.preventDefault();e.stopPropagation()}},true)})();</script>';
 
-const FIT = '<script data-proto-fix="1">(function(){document.body.style.overflow="auto";document.body.style.height="auto";function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}fit();window.addEventListener("load",fit);document.querySelectorAll("video").forEach(function(video){video.muted=true;video.playsInline=true;var play=video.play();if(play&&play.catch)play.catch(function(){})})})();</script>';
+const FIT = '<script data-proto-fix="1">(function(){function release(){var root=document.documentElement;var body=document.body;[root,body].forEach(function(el){if(!el)return;el.style.setProperty("overflow","auto","important");el.style.setProperty("height","auto","important");el.style.setProperty("position","static","important")});document.querySelectorAll("body *").forEach(function(el){var s=getComputedStyle(el);var fixed=s.position==="fixed"||s.position==="absolute";if(!fixed)return;var r=el.getBoundingClientRect();var covers=r.width>window.innerWidth*0.7&&r.height>window.innerHeight*0.7;var invisible=s.visibility==="hidden"||parseFloat(s.opacity)===0||s.display==="none";if(covers&&invisible)el.style.setProperty("pointer-events","none","important");else if(el.style.pointerEvents==="none")el.style.removeProperty("pointer-events")})}function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}release();fit();window.addEventListener("load",function(){release();fit()});setTimeout(release,500);document.querySelectorAll("video").forEach(function(video){video.muted=true;video.playsInline=true;var play=video.play();if(play&&play.catch)play.catch(function(){})})})();</script>';
 
 const CSP = "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: data:; media-src 'self' data: blob: https:; frame-src 'self' https:; frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
 
@@ -122,8 +122,65 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
     const end = html.toLowerCase().lastIndexOf('</body>');
     html = end >= 0 ? html.slice(0, end) + FIT + html.slice(end) : html + FIT;
   }
+  if (String(pageUrl).includes('/preview/')) html = injectBrandFonts(html, pageUrl);
   if (assetRoot) html = pinLocalAssets(html, assetRoot);
   return new Response(html, { headers });
+}
+
+const FONT_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+
+function injectBrandFonts(html, pageUrl) {
+  const base = (html.match(/<base\b[^>]*href=["']([^"']+)["']/i) || [])[1] || pageUrl;
+  const seen = new Set();
+  const faces = [];
+  const re = /(?:href|src)=["']([^"']+\.woff2?(?:\?[^"']*)?)["']/gi;
+  let match;
+  while ((match = re.exec(html))) {
+    let abs = '';
+    try { abs = new URL(match[1], base).href; } catch { abs = ''; }
+    if (!abs || seen.has(abs) || !/^https:\/\//i.test(abs)) continue;
+    seen.add(abs);
+    const file = abs.split('/').pop().split('?')[0].replace(/\.woff2?$/i, '').replace(/[^a-z0-9_-]+/gi, '');
+    if (!file) continue;
+    const weight = /bold/i.test(file) ? 700 : /semibold|medium/i.test(file) ? 600 : 400;
+    const proxied = new URL(pageUrl);
+    proxied.search = `?remote=${encodeURIComponent(abs)}`;
+    const format = /\.woff2(\?|$)/i.test(abs) ? 'woff2' : 'woff';
+    faces.push(`@font-face{font-family:"${file}";src:url("${proxied.href}") format("${format}");font-weight:${weight};font-style:normal;font-display:swap}`);
+  }
+  if (!faces.length || html.includes('data-proto-font')) return html;
+  const style = `<style data-proto-font>${faces.join('')}</style>`;
+  return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${style}</head>`) : `${style}${html}`;
+}
+
+export async function proxyRemote(env, jobId, raw) {
+  let target;
+  try { target = new URL(raw); } catch { return new Response('Not found', { status: 404 }); }
+  if (target.protocol !== 'https:') return new Response('Not found', { status: 404 });
+  const jobObj = env.R2 ? await env.R2.get(`sites/${jobId}/job.json`) : null;
+  const job = jobObj ? await jobObj.json().catch(() => null) : null;
+  let sourceHost = '';
+  try { sourceHost = new URL(job?.source_url || '').host; } catch { sourceHost = ''; }
+  if (!sourceHost || target.host !== sourceHost) return new Response('Not found', { status: 404 });
+  if (!/\.woff2?(\?|$)/i.test(target.pathname)) return new Response('Not found', { status: 404 });
+  const res = await fetch(target.href, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': FONT_UA,
+      Referer: job.source_url || target.origin,
+      Accept: '*/*',
+    },
+  });
+  if (!res.ok) return new Response('Not found', { status: 404 });
+  const type = /\.woff2(\?|$)/i.test(target.pathname) ? 'font/woff2' : 'font/woff';
+  return new Response(res.body, {
+    headers: {
+      'Content-Type': type,
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 function folderUrl(pageUrl) {
