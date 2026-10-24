@@ -622,6 +622,21 @@ async function jobImages(env, user, jobId, showSmall) {
   if (!env.R2) return json({ images: [], imageCount: 0, skipped: 0, showSmall });
   const obj = await env.R2.get(`sites/${jobId}/manifest.json`);
   const man = obj ? await obj.json().catch(() => ({})) : {};
+  const page = await env.R2.get(`sites/${jobId}/index.html`);
+  const html = page ? await page.text() : '';
+  const onPage = html ? imagesInPage(html) : [];
+  if (onPage.length) {
+    const images = onPage.map((src) => ({
+      url: src,
+      local: src.split('/').pop().split('?')[0] || 'image',
+      src,
+      size: 0,
+      contentType: 'image/jpeg',
+      kind: 'photo',
+      small: false,
+    }));
+    return json({ images, imageCount: images.length, skipped: 0, totalMB: man.totalMB, showSmall });
+  }
   const seen = new Set();
   const images = [];
   let skipped = 0;
@@ -631,51 +646,50 @@ async function jobImages(env, user, jobId, showSmall) {
     if (!local || local.includes('..') || seen.has(local)) continue;
     if (!viewableListed(img)) { skipped += 1; continue; }
     seen.add(local);
-    if (img.url) seen.add(img.url);
     images.push({ ...img, local, src: `/preview/${jobId}/${local}` });
-  }
-  const page = await env.R2.get(`sites/${jobId}/index.html`);
-  if (page) {
-    const html = await page.text();
-    for (const src of imagesInPage(html)) {
-      if (seen.has(src)) continue;
-      seen.add(src);
-      images.push({
-        url: src,
-        local: src.split('/').pop().split('?')[0] || 'image',
-        src,
-        size: 0,
-        contentType: 'image/jpeg',
-        kind: 'photo',
-        small: false,
-      });
-    }
-  }
-  const shot = await env.R2.head(`sites/${jobId}/screenshots/phone.png`);
-  if (shot && !seen.has('screenshots/phone.png')) {
-    images.unshift({
-      url: '',
-      local: 'screenshots/phone.png',
-      src: `/preview/${jobId}/screenshots/phone.png`,
-      size: shot.size || 0,
-      contentType: 'image/png',
-      kind: 'photo',
-      small: false,
-    });
   }
   return json({ images, imageCount: images.length, skipped, totalMB: man.totalMB, showSmall });
 }
 
+function pageRegion(html) {
+  const main = html.match(/<main\b[^>]*>[\s\S]*?<\/main>/i);
+  if (main && /<img\b/i.test(main[0])) return main[0];
+  return html
+    .replace(/<header\b[^>]*>[\s\S]*?<\/header>/gi, '')
+    .replace(/<nav\b[^>]*>[\s\S]*?<\/nav>/gi, '')
+    .replace(/<footer\b[^>]*>[\s\S]*?<\/footer>/gi, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+}
+
+function shotKey(src) {
+  let name = src.split('/').pop().split('?')[0].toLowerCase();
+  try { name = decodeURIComponent(name); } catch { /* keep the raw name */ }
+  return name
+    .replace(/^(mobile|desktop|tablet)_/, '')
+    .replace(/_(4x5|16x9|1x1|9x16|3x4|2x3|21x9)/g, '')
+    .replace(/\.(jpe?g|png|webp|avif)$/, '');
+}
+
 function imagesInPage(html) {
+  const region = pageRegion(html);
+  const tags = [
+    ...region.matchAll(/<img\b[^>]*>/gi),
+    ...region.matchAll(/<source\b[^>]*>/gi),
+  ];
   const found = [];
   const seen = new Set();
-  const re = /<img\b[^>]*\ssrc=["']([^"']+)["']/gi;
-  let match;
-  while ((match = re.exec(html)) && found.length < 48) {
-    const src = match[1];
-    if (!/^https?:\/\//i.test(src) || seen.has(src)) continue;
-    if (/\.svg(\?|$)/i.test(src) || /logo|sprite|icon|pixel|spacer|badge|favicon|tracking|analytics/i.test(src)) continue;
+  const keys = new Set();
+  for (const match of tags) {
+    if (found.length >= 24) break;
+    const tag = match[0];
+    const src = (tag.match(/\s(?:src|data-src)=["']([^"']+)["']/i) || [])[1]
+      || (tag.match(/\s(?:srcset|data-srcset)=["']([^"'\s,]+)/i) || [])[1];
+    if (!src || !/^https?:\/\//i.test(src) || seen.has(src)) continue;
+    if (/\.svg(\?|$)/i.test(src) || /logo|sprite|icon|pixel|spacer|badge|favicon|tracking|analytics|placeholder|navigation-menu|nav-tile/i.test(src)) continue;
+    const key = shotKey(src);
+    if (keys.has(key)) continue;
     seen.add(src);
+    keys.add(key);
     found.push(src);
   }
   return found;

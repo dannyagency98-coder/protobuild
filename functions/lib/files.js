@@ -22,7 +22,140 @@ const TYPES = {
 
 const PICK = '<script data-proto-stay="1">(function(){function foreign(url){try{return new URL(url,location.href).origin!==location.origin}catch(e){return true}}var pick=false;window.addEventListener("message",function(e){if(!e.data||e.data.type!=="pb-pick")return;pick=!!e.data.on;document.documentElement.style.cursor=pick?"crosshair":""});document.addEventListener("click",function(e){if(pick){e.preventDefault();e.stopPropagation();var el=e.target;if(!el||!el.tagName)return;var cls=typeof el.className==="string"?el.className.trim().split(/\\s+/).filter(Boolean).slice(0,2).join("."):"";var sel=el.id?"#"+el.id:el.tagName.toLowerCase()+(cls?"."+cls:"");var text=(el.innerText||el.getAttribute("alt")||"").replace(/\\s+/g," ").trim().slice(0,180);parent.postMessage({type:"pb-picked",selector:sel,text:text},"*");return}var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&foreign(a.getAttribute("href"))){e.preventDefault();e.stopPropagation()}},true)})();</script>';
 
-const FIT = '<script data-proto-fix="1">(function(){function release(){var root=document.documentElement;var body=document.body;[root,body].forEach(function(el){if(!el)return;el.style.setProperty("overflow","auto","important");el.style.setProperty("height","auto","important");el.style.setProperty("position","static","important")});document.querySelectorAll("body *").forEach(function(el){var s=getComputedStyle(el);var fixed=s.position==="fixed"||s.position==="absolute";if(!fixed)return;var r=el.getBoundingClientRect();var covers=r.width>window.innerWidth*0.7&&r.height>window.innerHeight*0.7;var invisible=s.visibility==="hidden"||parseFloat(s.opacity)===0||s.display==="none";if(covers&&invisible)el.style.setProperty("pointer-events","none","important");else if(el.style.pointerEvents==="none")el.style.removeProperty("pointer-events")})}function fit(){var root=document.documentElement;root.style.zoom="";var wide=Math.max(root.scrollWidth||0,document.body?document.body.scrollWidth:0);var view=window.innerWidth||0;if(view>0&&wide>view+12)root.style.zoom=String(view/wide)}release();fit();window.addEventListener("load",function(){release();fit()});setTimeout(release,500);var brand=document.querySelector("style[data-proto-font]");if(brand){var re=/font-family:\"([^\"]+)\";src:url\\(\"([^\"]+)\"\\)/g;var found;while((found=re.exec(brand.textContent))){try{var face=new FontFace(found[1],"url("+found[2]+")");face.load().then(function(loaded){document.fonts.add(loaded)})}catch(e){}}}document.querySelectorAll("video").forEach(function(video){video.muted=true;video.playsInline=true;var play=video.play();if(play&&play.catch)play.catch(function(){})})})();</script>';
+const FIT = `<script data-proto-fix="1">(function(){
+  var FALLBACK = '"Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif';
+  function unlock(el) {
+    if (!el) return;
+    el.style.setProperty("overflow", "auto", "important");
+    el.style.setProperty("height", "auto", "important");
+    el.style.setProperty("max-height", "none", "important");
+    el.style.setProperty("position", "static", "important");
+    el.style.setProperty("touch-action", "pan-y", "important");
+  }
+  function release() {
+    unlock(document.documentElement);
+    unlock(document.body);
+    document.querySelectorAll("body *").forEach(function(el) {
+      var s = getComputedStyle(el);
+      var fixed = s.position === "fixed" || s.position === "absolute";
+      if (!fixed) return;
+      var r = el.getBoundingClientRect();
+      var covers = r.width > window.innerWidth * 0.7 && r.height > window.innerHeight * 0.7;
+      var invisible = s.visibility === "hidden" || parseFloat(s.opacity) === 0 || s.display === "none";
+      if (covers && invisible) el.style.setProperty("pointer-events", "none", "important");
+    });
+  }
+  function innerScroll(node, dy) {
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (node.nodeType === 1) {
+        var oy = getComputedStyle(node).overflowY;
+        if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 12) {
+          var top = node.scrollTop;
+          var max = node.scrollHeight - node.clientHeight;
+          if ((dy > 0 && top < max - 1) || (dy < 0 && top > 1)) return node;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+  function wheelDelta(e) {
+    var y = e.deltaY || 0;
+    if (e.deltaMode === 1) y *= 32;
+    else if (e.deltaMode === 2) y *= window.innerHeight || 800;
+    return y;
+  }
+  function typing(e) {
+    var tag = e.target && e.target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target && e.target.isContentEditable);
+  }
+  function onWheel(e) {
+    if (e.ctrlKey) return;
+    var y = wheelDelta(e);
+    if (!y || typing(e) || innerScroll(e.target, y)) return;
+    unlock(document.documentElement);
+    unlock(document.body);
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    window.scrollBy(0, y);
+  }
+  var touchY = 0;
+  function onTouchStart(e) {
+    if (e.touches && e.touches[0]) touchY = e.touches[0].clientY;
+  }
+  function onTouchMove(e) {
+    if (!e.touches || !e.touches[0]) return;
+    var y = e.touches[0].clientY;
+    var dy = touchY - y;
+    touchY = y;
+    if (Math.abs(dy) < 2 || typing(e) || innerScroll(e.target, dy)) return;
+    unlock(document.documentElement);
+    unlock(document.body);
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    window.scrollBy(0, dy);
+  }
+  function fontStack(fam) {
+    if (!fam || /icon|fontello|symbol|emoji|awesome/i.test(fam)) return "";
+    if (/Iowan Old Style|Palatino|Georgia/i.test(fam)) return "";
+    if (/,/.test(fam) && /serif|sans-serif|monospace|system-ui/i.test(fam)) return "";
+    return fam + ", " + FALLBACK;
+  }
+  function paintFonts(el, inherited) {
+    if (!el || el.nodeType !== 1 || el.tagName === "SCRIPT" || el.tagName === "STYLE") return;
+    var fam = "";
+    try { fam = getComputedStyle(el).fontFamily || ""; } catch (err) {}
+    var passed = inherited;
+    if (fam && fam !== inherited) {
+      var next = fontStack(fam);
+      if (next) el.style.fontFamily = next;
+      passed = next || fam;
+    }
+    for (var i = 0; i < el.children.length; i++) paintFonts(el.children[i], passed);
+  }
+  function fit() {
+    var root = document.documentElement;
+    root.style.zoom = "";
+    var wide = Math.max(root.scrollWidth || 0, document.body ? document.body.scrollWidth : 0);
+    var view = window.innerWidth || 393;
+    if (wide > view + 12) root.style.zoom = String(Math.max(0.3, view / wide));
+  }
+  function loadFaces() {
+    document.querySelectorAll("style[data-proto-font]").forEach(function(style) {
+      var css = style.textContent || "";
+      var re = /font-family:"([^"]+)";src:url\\("([^"]+)"\\)/g;
+      var found;
+      while ((found = re.exec(css))) {
+        try {
+          var face = new FontFace(found[1], 'url("' + found[2] + '")');
+          face.load().then(function(loaded) { document.fonts.add(loaded); }).catch(function() {});
+        } catch (err) {}
+      }
+    });
+  }
+  function arm() {
+    release();
+    fit();
+    loadFaces();
+    var paint = function() { if (document.body) paintFonts(document.body, ""); };
+    if (window.requestIdleCallback) requestIdleCallback(paint, { timeout: 600 });
+    else setTimeout(paint, 40);
+    document.querySelectorAll("video").forEach(function(video) {
+      video.muted = true;
+      video.playsInline = true;
+      var play = video.play();
+      if (play && play.catch) play.catch(function() {});
+    });
+  }
+  window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  window.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+  window.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", arm);
+  else arm();
+  window.addEventListener("load", function() { setTimeout(arm, 500); });
+})();</script>`;
 
 const CSP = "default-src 'self' data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: data:; media-src 'self' data: blob: https:; frame-src 'self' https:; frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
 
@@ -120,8 +253,9 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
     html = withSharePreview(html, { pageUrl, imageUrl });
   }
   if (!html.includes('data-proto-fix')) {
-    const end = html.toLowerCase().lastIndexOf('</body>');
-    html = end >= 0 ? html.slice(0, end) + FIT + html.slice(end) : html + FIT;
+    html = /<head[^>]*>/i.test(html)
+      ? html.replace(/<head[^>]*>/i, (open) => `${open}${FIT}`)
+      : `<head>${FIT}</head>${html}`;
   }
   if (String(pageUrl).includes('/preview/')) html = await injectBrandFonts(env, html, pageUrl);
   if (assetRoot) html = pinLocalAssets(html, assetRoot);
@@ -144,6 +278,9 @@ async function injectBrandFonts(env, html, pageUrl) {
     const weight = /semibold|medium/i.test(family) ? '600' : /bold/i.test(family) ? '700' : '400';
     const href = new URL(`/preview/${jobId}/assets/${file}`, pageUrl).href;
     faces.push(`@font-face{font-family:"${family}";src:url("${href}") format("${format}");font-weight:${weight};font-style:normal;font-display:swap}`);
+    if (!/icon|fontello|symbol|masked/i.test(family)) {
+      faces.push(`@font-face{font-family:"${family}";src:local("Iowan Old Style"),local("Palatino Linotype"),local("Palatino"),local("Georgia");font-weight:${weight};font-style:normal}`);
+    }
   }
   if (!faces.length) return html;
   const style = `<style data-proto-font>${faces.join('')}</style>`;
