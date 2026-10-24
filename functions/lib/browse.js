@@ -437,17 +437,18 @@ export async function captureInBrowser(env, job) {
     const page = await browser.newPage();
     await page.setUserAgent(PHONE_UA);
     await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-    await page.goto(job.source_url, { waitUntil: 'domcontentloaded', timeout: 28000 });
+    const opened = await page.goto(job.source_url, { waitUntil: 'domcontentloaded', timeout: 25000 }).then(() => true).catch(() => false);
+    if (!opened) await page.goto(job.source_url, { waitUntil: 'commit', timeout: 15000 }).catch(() => {});
     await page.evaluate(() => new Promise((resolve) => {
       const done = () => resolve();
       if (document.readyState === 'complete') setTimeout(done, 800);
       else window.addEventListener('load', () => setTimeout(done, 800), { once: true });
       setTimeout(done, 6000);
     })).catch(() => {});
-    const urls = await settleImages(page);
-    const extras = await collectFace(page);
-    const shot = new Uint8Array(await page.screenshot({ type: 'png' }));
-    const raw = await page.content();
+    const urls = await settleImages(page).catch(() => []);
+    const extras = await collectFace(page).catch(() => ({ sheets: [], fonts: [], icons: [] }));
+    const shot = new Uint8Array(await page.screenshot({ type: 'png' }).catch(() => new Uint8Array()));
+    const raw = await page.content().catch(() => '');
     await browser.close();
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const rich = /<(img|video|source|link)\b/i.test(raw);

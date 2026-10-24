@@ -120,16 +120,37 @@ export async function queueCapture(env, user, body, waitUntil) {
   await putJob(env, created);
   await rememberJob(env, user.id, created.id);
   if (canBrowser) {
-    waitUntil(captureInBrowser(env, created).catch(async () => {
-      const current = await readStoredJob(env, created.id);
-      if (current && (/stopped/i.test(String(current.error || '')) || current.status === 'done' || current.status === 'failed' || current.status === 'blocked')) return;
-      const queued = await dispatchGithub(env, created);
-      if (queued) {
-        await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Previewing the screen' });
-        return;
+    waitUntil((async () => {
+      const finishSaved = async () => {
+        const current = await readStoredJob(env, created.id);
+        if (current && /stopped/i.test(String(current.error || ''))) return true;
+        if (current?.status === 'done') return true;
+        const page = await env.R2.head(`sites/${created.id}/index.html`);
+        if (!page) return false;
+        await putJob(env, {
+          ...(current || created),
+          status: 'done',
+          phase: 'packaging',
+          phaseDetail: 'Previewing the screen',
+          error: null,
+          finished_at: new Date().toISOString(),
+        });
+        return true;
+      };
+      try {
+        await captureInBrowser(env, created);
+      } catch {
+        if (await finishSaved()) return;
+        try { await captureInBrowser(env, created); } catch { /* the second open can fail too */ }
+        if (await finishSaved()) return;
+        const queued = await dispatchGithub(env, created);
+        if (queued) {
+          await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Previewing the screen' });
+          return;
+        }
+        await putJob(env, { ...created, status: 'failed', error: 'The page did not open.', finished_at: new Date().toISOString() });
       }
-      await putJob(env, { ...created, status: 'failed', error: 'The page did not open.', finished_at: new Date().toISOString() });
-    }));
+    })());
     return json(created);
   }
   const queued = await dispatchGithub(env, created);
