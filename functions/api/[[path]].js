@@ -715,6 +715,7 @@ async function deleteStoredSite(env, jobId) {
 async function removeJob(env, user, jobId) {
   const job = await loadJob(env, user.id, jobId);
   if (!job) return json({ error: 'Job not found' }, 404);
+  if (job.share_token && env.R2) await env.R2.delete(`shares/${job.share_token}.json`).catch(() => {});
   await forgetJob(env, user.id, jobId);
   await deleteStoredSite(env, jobId);
   return json({ ok: true, id: jobId });
@@ -727,6 +728,10 @@ async function removeAllJobs(env, user) {
       httpMetadata: { contentType: 'application/json' },
     });
   }
-  for (const id of ids) await deleteStoredSite(env, id);
+  for (const id of ids) {
+    const job = await loadJob(env, user.id, id);
+    if (job?.share_token && env.R2) await env.R2.delete(`shares/${job.share_token}.json`).catch(() => {});
+    await deleteStoredSite(env, id);
+  }
   return json({ ok: true, removed: ids.length });
 }

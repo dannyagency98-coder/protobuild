@@ -1131,8 +1131,9 @@ async function wasStopped() {
     const got = await client.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: `sites/${JOB_ID}/job.json` }));
     const current = JSON.parse(await got.Body.transformToString());
     return current.status === 'failed' && /stopped/i.test(String(current.error || ''));
-  } catch {
-    return false;
+  } catch (err) {
+    const missing = err?.name === 'NoSuchKey' || err?.Code === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
+    return missing;
   }
 }
 

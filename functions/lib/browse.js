@@ -469,7 +469,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
 async function saveJob(env, job) {
   const existing = await env.R2.get(`sites/${job.id}/job.json`);
   const saved = existing ? await existing.json().catch(() => null) : null;
-  if (saved && /stopped/i.test(String(saved.error || ''))) return false;
+  if (!saved || /stopped/i.test(String(saved.error || ''))) return false;
   if (saved && saved.status === 'done' && job.status === 'running') return false;
   if (saved && (saved.status === 'failed' || saved.status === 'blocked') && job.status !== 'failed' && job.status !== 'blocked') return false;
   await env.R2.put(`sites/${job.id}/job.json`, JSON.stringify(job), {
@@ -498,6 +498,13 @@ export async function captureInBrowser(env, job) {
     const raw = await page.content().catch(() => '');
     const brandFonts = await grabFonts(page).catch(() => []);
     await browser.close();
+    const stoppedNow = async () => {
+      const prior = await env.R2.get(`sites/${job.id}/job.json`);
+      if (!prior) return true;
+      const priorJob = await prior.json().catch(() => null);
+      return !priorJob || /stopped/i.test(String(priorJob.error || ''));
+    };
+    if (await stoppedNow()) return;
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const rich = /<(img|video|source|link)\b/i.test(raw);
     let html = (text.length > 40 || rich) ? preparePage(raw, job.source_url) : screenshotPage();
@@ -523,11 +530,6 @@ export async function captureInBrowser(env, job) {
     }
     let images = [];
     let files = [];
-    const stoppedNow = async () => {
-      const prior = await env.R2.get(`sites/${job.id}/job.json`);
-      const priorJob = prior ? await prior.json().catch(() => null) : null;
-      return !!(priorJob && /stopped/i.test(String(priorJob.error || '')));
-    };
     if (await stoppedNow()) return;
     await env.R2.put(`sites/${job.id}/screenshots/phone.png`, shot, {
       httpMetadata: { contentType: 'image/png' },
@@ -550,7 +552,7 @@ export async function captureInBrowser(env, job) {
           mirrorAssets(env, job, html, urls, extras),
           new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
         ]);
-        if (mirrored && !mirrored.aborted && mirrored.html) {
+        if (mirrored && !mirrored.aborted && mirrored.html && !(await stoppedNow())) {
           html = mirrored.html;
           images = mirrored.images || [];
           files = files.concat(mirrored.files || []);

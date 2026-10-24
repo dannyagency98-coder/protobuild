@@ -153,7 +153,7 @@ export async function queueCapture(env, user, body, waitUntil) {
     waitUntil((async () => {
       const finishSaved = async () => {
         const current = await readStoredJob(env, created.id);
-        if (current && /stopped/i.test(String(current.error || ''))) return true;
+        if (!current || /stopped/i.test(String(current.error || ''))) return true;
         if (current?.status === 'done') return true;
         const page = await env.R2.head(`sites/${created.id}/index.html`);
         if (!page) return false;

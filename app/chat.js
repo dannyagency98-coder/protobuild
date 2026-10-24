@@ -1015,13 +1015,16 @@ function setSendMode(on) {
   btn.setAttribute('aria-label', on ? 'Stop' : 'Send');
 }
 
+function killFrames() {
+  document.querySelectorAll('#stage, #phoneView iframe, .preview-card iframe').forEach((frame) => {
+    frame.classList.add('hidden');
+    if (frame.getAttribute('src')) frame.src = 'about:blank';
+  });
+}
+
 function clearScanPresentation() {
   stream?.querySelectorAll('.live').forEach((node) => node.remove());
-  stream?.querySelectorAll('.preview-card iframe').forEach((frame) => frame.removeAttribute('src'));
-  document.querySelectorAll('#stage, #phoneView iframe').forEach((frame) => {
-    frame.classList.add('hidden');
-    frame.removeAttribute('src');
-  });
+  killFrames();
   const empty = document.getElementById('stageEmpty');
   if (empty) empty.classList.remove('busy', 'veil', 'hidden');
   const steps = document.getElementById('captureSteps');
@@ -2207,15 +2210,16 @@ async function loadGallery(job) {
 }
 
 function resetChat() {
+  pollGen += 1;
+  sendToken += 1;
+  const ctrl = inflight;
+  inflight = null;
+  try { ctrl?.abort(); } catch { /* the request is already done */ }
   activeJob = null;
   thread = [];
   clearSession();
   stream.innerHTML = '';
-  const frame = document.getElementById('stage');
-  if (frame) {
-    frame.classList.add('hidden');
-    frame.removeAttribute('src');
-  }
+  killFrames();
   const empty = document.getElementById('stageEmpty');
   if (empty) {
     empty.classList.remove('hidden', 'busy');
@@ -2536,8 +2540,26 @@ function fillPrompt(text) {
   closePop();
 }
 
+function previewShowing(id) {
+  if (!id) return false;
+  if (activeJob?.id === id) return true;
+  const src = document.getElementById('stage')?.getAttribute('src') || '';
+  return src.includes(id);
+}
+
+function linkedChat(jobId) {
+  try {
+    const id = localStorage.getItem(chatMapKey(jobId)) || '';
+    if (/^[a-f0-9]{8}$/.test(id)) return id;
+  } catch { /* look through saved chats */ }
+  for (const data of listLocalChats()) {
+    if (data.jobId === jobId && /^[a-f0-9]{8}$/.test(data.chatId)) return data.chatId;
+  }
+  return '';
+}
+
 async function removeCapture(id) {
-  const job = jobs.find((item) => item.id === id);
+  const job = jobs.find((item) => item.id === id) || (activeJob?.id === id ? activeJob : null);
   const name = String(job?.source_url || 'this capture').replace(/^https?:\/\//, '').replace(/\/$/, '');
   const yes = await confirmAsk({
     title: 'Remove this capture?',
@@ -2548,16 +2570,19 @@ async function removeCapture(id) {
   if (!yes) return;
   goneIds.add(id);
   jobs = jobs.filter((item) => item.id !== id);
+  const sessionId = linkedChat(id);
   try {
-    const sessionId = chatIdFor(id);
     localStorage.removeItem(threadKey(id));
     localStorage.removeItem(chatMapKey(id));
     if (sessionId) localStorage.removeItem(sessionStoreKey(sessionId));
+    if (localStorage.getItem(sessionPointerKey()) === sessionId) localStorage.removeItem(sessionPointerKey());
   } catch { /* the capture is already gone */ }
-  if (activeJob?.id === id) resetChat();
+  if (previewShowing(id) || (sessionId && sessionId === chatId)) resetChat();
   else renderHistory();
   closePop();
+  closeLightbox();
   toast('Capture removed.');
+  if (jobLive(job)) api('/api/jobs/' + encodeURIComponent(id) + '/stop', { method: 'POST', body: '{}' }).catch(() => {});
   api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }).catch((err) => {
     goneIds.delete(id);
     toast(err.message);
@@ -2566,6 +2591,15 @@ async function removeCapture(id) {
 }
 
 function dropChat(id) {
+  let jobId = '';
+  try {
+    const data = JSON.parse(localStorage.getItem(sessionStoreKey(id)) || 'null');
+    jobId = data?.jobId || '';
+  } catch { /* a local chat can still be removed */ }
+  if (jobId) {
+    removeCapture(jobId);
+    return;
+  }
   try {
     localStorage.removeItem(sessionStoreKey(id));
     if (localStorage.getItem(sessionPointerKey()) === id) localStorage.removeItem(sessionPointerKey());
@@ -2604,14 +2638,25 @@ async function clearOpenChat() {
     danger: true,
   });
   if (!yes) return;
-  try {
-    if (chatId) localStorage.removeItem(sessionStoreKey(chatId));
-    localStorage.removeItem(sessionPointerKey());
-  } catch {}
+  const jobId = activeJob?.id || '';
   const gone = chatId;
+  try {
+    if (gone) localStorage.removeItem(sessionStoreKey(gone));
+    localStorage.removeItem(sessionPointerKey());
+  } catch { /* already gone */ }
   resetChat();
   if (gone) {
     try { localStorage.removeItem(sessionStoreKey(gone)); } catch { /* already gone */ }
+  }
+  if (jobId) {
+    goneIds.add(jobId);
+    jobs = jobs.filter((item) => item.id !== jobId);
+    api('/api/jobs/' + encodeURIComponent(jobId) + '/stop', { method: 'POST', body: '{}' }).catch(() => {});
+    api('/api/jobs/' + encodeURIComponent(jobId), { method: 'DELETE' }).catch((err) => {
+      goneIds.delete(jobId);
+      toast(err.message);
+      refreshJobs();
+    });
   }
   renderHistory();
   toast('Chat cleared.');
