@@ -3,7 +3,7 @@ import { passwordAuth, updatePassword } from '../lib/auth.js';
 import { answer } from '../lib/switch.js';
 import { validateCss } from '../lib/css.js';
 import { applyChange, saveLogo, setShare, shareLive, undoChange } from '../lib/actions.js';
-import { absolutizeFragment, asksCookie, dropAsked, dropPhrase, fileLooksHtml, relabelAsked, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile } from '../lib/page-edit.js';
+import { absolutizeFragment, asksCookie, dropAsked, dropPhrase, dropPopups, fileLooksHtml, relabelAsked, revealNav, sectionKind, swapSection, wantsApplyFile, wantsBorrow, wantsEdit, wantsPreviewFile, wantsShowNav } from '../lib/page-edit.js';
 import { applyReplacements } from '../lib/edit.js';
 import { assertPublicHttpUrl } from '../lib/public-url.js';
 
@@ -397,6 +397,20 @@ async function handleAgent(request, env, user, waitUntil) {
     } catch (err) {
       return sse({ reply: err.message || 'That link could not be used.', job: publicJob(env, job) });
     }
+  }
+
+  if (wantsShowNav(message)) {
+    try { await applyChange(env, job, { kind: 'html', html: revealNav(page) }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: 'The navigation is open on the phone.', job: await jobForClient(env, job), edited: true });
+  }
+
+  if (/\b(remo\w*|hide|close|dismiss|strip)\b/i.test(message) && /\b(popup|pop-up|modal|newsletter|dialog|overlay)\b/i.test(message)) {
+    const stripped = dropPopups(page);
+    if (stripped === page) return sse({ reply: 'I could not find a popup on this page.', job: publicJob(env, job) });
+    try { await applyChange(env, job, { kind: 'html', html: stripped }); }
+    catch (err) { return sse({ reply: err.message || 'That edit did not save.', job: publicJob(env, job) }); }
+    return sse({ reply: 'Removed the popup. The page is on the phone.', job: await jobForClient(env, job), edited: true });
   }
 
   const relabeled = relabelAsked(page, message);

@@ -1,5 +1,6 @@
 import puppeteer from '@cloudflare/puppeteer';
 import { fontFile, imageFile, rewriteMirrored } from './assets.js';
+import { dropCookie, dropPopups } from './page-edit.js';
 
 const PHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
@@ -74,6 +75,7 @@ function preparePage(html, sourceUrl) {
     return tag;
   });
   next = next.replace(/\son\w+\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '');
+  next = dropPopups(dropCookie(next));
   let baseHref = '';
   try {
     const url = new URL(sourceUrl);
@@ -93,6 +95,14 @@ function screenshotPage() {
 async function settleImages(page) {
   return page.evaluate(async () => {
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    document.querySelectorAll('[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="popup"],[id*="popup"],[class*="newsletter"],[class*="cookie"]').forEach((el) => {
+      if (!el || el.closest('header, nav')) return;
+      const name = `${el.className || ''} ${el.id || ''}`;
+      if (/\b(nav|menu|dropdown|submenu)\b/i.test(name)) return;
+      el.remove();
+    });
+    if (document.body) document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
     const accept = [...document.querySelectorAll('button, a, [role="button"]')].find((el) => {
       const label = (el.innerText || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       return label.length > 1 && label.length < 48 && /accept all|accept|agree|allow all|accetta|aceptar|akzeptieren|tout accepter|i agree/i.test(label);

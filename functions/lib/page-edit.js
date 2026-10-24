@@ -116,8 +116,49 @@ export function sectionKind(message) {
   return 'header';
 }
 
+const POPUP_ATTR = /popup|pop-up|newsletter|signup|sign-up|age-gate|agegate|interstitial|cookie|consent|gdpr|onetrust|cookiebot/i;
+
+export function dropPopups(html) {
+  let next = String(html || '');
+  for (let pass = 0; pass < 8; pass += 1) {
+    const hit = shortest(next, (item, inner) => {
+      if (item.name === 'header' || item.name === 'nav' || item.name === 'main' || item.name === 'footer') return false;
+      if (/<header\b|<nav\b/i.test(inner) && inner.length > 1500) return false;
+      const role = (item.attrs.match(/\brole=["']([^"']+)/i) || [])[1] || '';
+      const modal = /\baria-modal=["']true["']/i.test(item.attrs);
+      if (/^(dialog|alertdialog)$/i.test(role) || modal) return true;
+      if (POPUP_ATTR.test(item.attrs) && !/\b(nav|menu|header|dropdown|submenu)\b/i.test(item.attrs)) return true;
+      const text = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text.length > 20 && text.length < 700 && /newsletter|sign up to|subscribe|we use cookies|accept all cookies|this (site|website) uses cookies/i.test(text)) return true;
+      return false;
+    }, 80000);
+    if (!hit) break;
+    const cutHtml = cut(next, hit.start, hit.end);
+    if (cutHtml === next) break;
+    next = cutHtml;
+  }
+  if (!next.includes('data-proto-popup')) {
+    const hide = '<style data-proto-popup>[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="popup" i],[id*="popup" i],[class*="newsletter" i],[class*="cookie" i],[id*="cookie" i],[id*="onetrust" i]{display:none!important}html,body{overflow:auto!important}</style>';
+    next = /<head[^>]*>/i.test(next) ? next.replace(/<head[^>]*>/i, (open) => `${open}${hide}`) : `${hide}${next}`;
+  }
+  return next;
+}
+
+export function wantsShowNav(message) {
+  const text = String(message || '');
+  return /\b(show|open|expand|reveal|toggle)\b/i.test(text) && /\b(nav|menu|dropdown|drop-down|submenu)\b/i.test(text);
+}
+
+export function revealNav(html) {
+  const css = '<style data-proto-nav>header [class*="dropdown" i],header [class*="submenu" i],header [class*="mega" i],nav [class*="dropdown" i],nav [class*="submenu" i],nav [class*="mega" i],[class*="nav" i] [class*="dropdown" i],[class*="menu" i] [class*="submenu" i]{display:block!important;visibility:visible!important;opacity:1!important;max-height:none!important;height:auto!important;overflow:visible!important;transform:none!important;clip:auto!important;clip-path:none!important;pointer-events:auto!important}</style>';
+  let next = String(html || '').replace(/<style data-proto-nav>[\s\S]*?<\/style>/i, '');
+  next = /<head[^>]*>/i.test(next) ? next.replace(/<head[^>]*>/i, (open) => `${open}${css}`) : `${css}${next}`;
+  return next;
+}
+
 export function wantsEdit(message) {
-  return /\b(change|edit|restyle|recolou?r|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(String(message || ''));
+  return /\b(change|edit|restyle|recolou?r|swap|replace|remove|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(String(message || ''))
+    || wantsShowNav(message);
 }
 
 export function wantsBorrow(message) {

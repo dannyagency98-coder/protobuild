@@ -1808,6 +1808,8 @@ async function runAgent({ token, trimmed, history, box, sent, ctrl, attachments 
     /\b(change|edit|restyle|recolou?r|swap|replace|remo\w*|hide|delete)\b|\b(make|turn|move|update) (the|this|it|that)\b|\b(bigger|smaller|larger|bolder)\b/i.test(trimmed)
     || (/cookie|consent|banner/i.test(trimmed) && /\bremo/i.test(trimmed))
     || (/\b(detail|details|text|price|prices|content)\b/i.test(trimmed) && /\b(file|document|this|these)\b/i.test(trimmed) && /\b(swap|replace|use|take|apply|put|add|bring)\b/i.test(trimmed))
+    || (/\b(show|open|expand|reveal|toggle)\b/i.test(trimmed) && /\b(nav|menu|dropdown|drop-down|submenu)\b/i.test(trimmed))
+    || (/\b(remo\w*|hide|close|strip)\b/i.test(trimmed) && /\b(popup|pop-up|modal|newsletter|overlay)\b/i.test(trimmed))
   );
   screenMode = editing ? 'edit' : '';
   if (activeJob) showStage(activeJob);
