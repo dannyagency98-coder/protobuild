@@ -198,6 +198,43 @@ async function settleImages(page) {
   }).catch(() => []);
 }
 
+async function grabFonts(page) {
+  return page.evaluate(async () => {
+    const faces = [];
+    const seen = new Set();
+    for (const sheet of [...document.styleSheets]) {
+      let rules = [];
+      try { rules = [...sheet.cssRules]; } catch { continue; }
+      for (const rule of rules) {
+        if (!rule.style || !String(rule.cssText || '').includes('@font-face')) continue;
+        const family = String(rule.style.getPropertyValue('font-family') || '').replace(/["']/g, '').trim();
+        const src = String(rule.style.getPropertyValue('src') || '');
+        const rel = (src.match(/url\((['"]?)([^'")]+?\.woff2)/i) || [])[2];
+        if (!family || !rel || seen.has(rel)) continue;
+        let abs = '';
+        try { abs = new URL(rel, sheet.href || location.href).href; } catch { continue; }
+        seen.add(rel);
+        faces.push({ family, url: abs });
+        if (faces.length >= 6) break;
+      }
+      if (faces.length >= 6) break;
+    }
+    const out = [];
+    for (const face of faces) {
+      try {
+        const res = await fetch(face.url);
+        if (!res.ok) continue;
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.length < 40 || buf.length > 400000) continue;
+        let binary = '';
+        for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        out.push({ family: face.family, b64: btoa(binary) });
+      } catch { /* the face stays on the original host */ }
+    }
+    return out;
+  }).catch(() => []);
+}
+
 async function collectFace(page) {
   return page.evaluate(() => {
     const abs = (value) => {
@@ -459,10 +496,28 @@ export async function captureInBrowser(env, job) {
     const extras = await collectFace(page).catch(() => ({ sheets: [], fonts: [], icons: [] }));
     const shot = new Uint8Array(await page.screenshot({ type: 'png' }).catch(() => new Uint8Array()));
     const raw = await page.content().catch(() => '');
+    const brandFonts = await grabFonts(page).catch(() => []);
     await browser.close();
     const text = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const rich = /<(img|video|source|link)\b/i.test(raw);
     let html = (text.length > 40 || rich) ? preparePage(raw, job.source_url) : screenshotPage();
+    const savedFonts = [];
+    for (const face of brandFonts) {
+      try {
+        const binary = atob(face.b64);
+        const data = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) data[i] = binary.charCodeAt(i);
+        const family = String(face.family || '').replace(/["']/g, '').trim();
+        const file = `${family.replace(/[^a-z0-9_-]+/gi, '') || `font-${savedFonts.length}`}.woff2`;
+        if (!family || data.length < 40) continue;
+        await env.R2.put(`sites/${job.id}/assets/${file}`, data, { httpMetadata: { contentType: 'font/woff2' } });
+        savedFonts.push({ family, file, data });
+      } catch { /* one face can fail */ }
+    }
+    if (savedFonts.length && !html.includes('data-proto-font')) {
+      const faces = savedFonts.map((face) => `@font-face{font-family:"${face.family}";src:url("assets/${face.file}") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}`).join('');
+      html = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `<style data-proto-font>${faces}</style></head>`) : `<style data-proto-font>${faces}</style>${html}`;
+    }
     let images = [];
     let files = [];
     const stoppedNow = async () => {
@@ -485,6 +540,7 @@ export async function captureInBrowser(env, job) {
     });
     if (!ready) return;
     files = [{ name: 'screenshots/phone.png', data: shot }];
+    for (const face of savedFonts) files.push({ name: `assets/${face.file}`, data: face.data });
     if (text.length > 40 || rich) {
       try {
         const mirrored = await Promise.race([

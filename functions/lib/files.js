@@ -85,6 +85,7 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
   const object = await env.R2.get(`sites/${jobId}/${file}`);
   if (!object) return new Response('Not found', { status: 404 });
   const headers = fileHeaders(file);
+  if (/\.(woff2?|otf|ttf)$/i.test(file)) headers['Access-Control-Allow-Origin'] = '*';
   if (share) {
     delete headers['X-Robots-Tag'];
     headers['Cache-Control'] = 'public, max-age=3600';
@@ -122,33 +123,28 @@ export async function serveStored(env, jobId, file, { share = false, pageUrl = '
     const end = html.toLowerCase().lastIndexOf('</body>');
     html = end >= 0 ? html.slice(0, end) + FIT + html.slice(end) : html + FIT;
   }
-  if (String(pageUrl).includes('/preview/')) html = injectBrandFonts(html, pageUrl);
+  if (String(pageUrl).includes('/preview/')) html = await injectBrandFonts(env, html, pageUrl);
   if (assetRoot) html = pinLocalAssets(html, assetRoot);
   return new Response(html, { headers });
 }
 
 const FONT_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
-function injectBrandFonts(html, pageUrl) {
-  const base = (html.match(/<base\b[^>]*href=["']([^"']+)["']/i) || [])[1] || pageUrl;
-  const seen = new Set();
+async function injectBrandFonts(env, html, pageUrl) {
+  const jobId = (String(pageUrl).match(/\/preview\/([^/]+)/) || [])[1];
+  if (!jobId || !env?.R2 || html.includes('data-proto-font')) return html;
+  const listed = await env.R2.list({ prefix: `sites/${jobId}/assets/` });
   const faces = [];
-  const re = /(?:href|src)=["']([^"']+\.woff2?(?:\?[^"']*)?)["']/gi;
-  let match;
-  while ((match = re.exec(html))) {
-    let abs = '';
-    try { abs = new URL(match[1], base).href; } catch { abs = ''; }
-    if (!abs || seen.has(abs) || !/^https:\/\//i.test(abs)) continue;
-    seen.add(abs);
-    const file = abs.split('/').pop().split('?')[0].replace(/\.woff2?$/i, '').replace(/[^a-z0-9_-]+/gi, '');
-    if (!file) continue;
-    const weight = /bold/i.test(file) ? 700 : /semibold|medium/i.test(file) ? 600 : 400;
-    const proxied = new URL(pageUrl);
-    proxied.search = `?remote=${encodeURIComponent(abs)}`;
-    const format = /\.woff2(\?|$)/i.test(abs) ? 'woff2' : 'woff';
-    faces.push(`@font-face{font-family:"${file}";src:url("${proxied.href}") format("${format}");font-weight:${weight};font-style:normal;font-display:swap}`);
+  for (const obj of listed.objects || []) {
+    const file = String(obj.key || '').split('/').pop();
+    if (!/\.woff2?$/i.test(file)) continue;
+    const family = file.replace(/\.woff2?$/i, '').replace(/[^a-z0-9_-]+/gi, '');
+    if (!family) continue;
+    const format = /\.woff2$/i.test(file) ? 'woff2' : 'woff';
+    const href = new URL(`/preview/${jobId}/assets/${file}`, pageUrl).href;
+    faces.push(`@font-face{font-family:"${family}";src:url("${href}") format("${format}");font-weight:100 900;font-style:normal;font-display:swap}`);
   }
-  if (!faces.length || html.includes('data-proto-font')) return html;
+  if (!faces.length) return html;
   const style = `<style data-proto-font>${faces.join('')}</style>`;
   return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${style}</head>`) : `${style}${html}`;
 }
