@@ -1843,7 +1843,7 @@ html[data-suggestions="off"] .starters { display: none !important; }
 .settings-shell {
   position: fixed;
   inset: 0;
-  z-index: 24;
+  z-index: 75;
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   background: #141414;
@@ -2031,7 +2031,11 @@ html[data-theme="light"] #prefSignOut:hover { background: #c4362c; color: #fff; 
 .feedback-actions button[type="submit"] { background: #fff; color: #111; border-color: #fff; }
 .feedback-actions button[type="submit"]:hover { filter: brightness(0.92); background: #fff; }
 #feedbackList { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 160px; overflow: auto; }
-#feedbackList li { font-size: 0.8rem; color: #cfcfcf; padding-top: 8px; border-top: 1px solid #2a2a2a; }
+#feedbackList[hidden] { display: none !important; }
+#feedbackList li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; font-size: 0.8rem; color: #cfcfcf; padding-top: 8px; border-top: 1px solid #2a2a2a; }
+#feedbackList li span { min-width: 0; overflow-wrap: anywhere; }
+#feedbackList li button { flex: none; height: 22px; border: 0; background: transparent; color: #a3a3a3; padding: 0; font-size: 0.75rem; }
+#feedbackList li button:hover { color: #fff; }
 
 html[data-theme="light"] body,
 html[data-theme="light"] .app,

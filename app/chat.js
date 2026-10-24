@@ -2180,9 +2180,9 @@ async function loadGallery(job) {
     galleryQuery = '';
     const search = document.getElementById('gallerySearch');
     if (search) search.value = '';
-    if (tinyBox) tinyBox.checked = !!readPrefs().tiny;
   }
-  const tiny = !!tinyBox?.checked;
+  if (tinyBox) tinyBox.checked = !!readPrefs().tiny;
+  const tiny = !!readPrefs().tiny;
   let data = { images: [] };
   try {
     data = await api('/api/jobs/' + encodeURIComponent(job.id) + '/images' + (tiny ? '?small=1' : ''));
@@ -2700,13 +2700,14 @@ function showSettingsPanel(name) {
 }
 
 function paintAccountPage() {
-  const email = readAuth()?.email || 'This computer';
+  const email = readAuth()?.email || '';
   const label = document.getElementById('accountPageEmail');
   const line = document.getElementById('accountEmail');
-  if (label) label.textContent = email ? 'Signed in as this email.' : 'Not signed in';
-  if (line) line.textContent = email;
+  if (line) line.textContent = email || 'Not signed in';
+  if (label) label.textContent = email ? 'Signed in on this computer.' : 'Sign in to use this account.';
   const images = document.getElementById('acctImages');
   if (images) images.disabled = !activeJob;
+  renderFeedback();
 }
 
 function openSettingsPage(panel) {
@@ -2728,16 +2729,25 @@ function closeSettingsPage() {
 function openAccount() {
   closePop();
   openSettingsPage('account');
-  document.getElementById('feedbackText')?.closest('form')?.scrollIntoView?.({ block: 'nearest' });
+}
+
+function feedbackKey() {
+  return userPrefix() + 'notes';
 }
 
 function readFeedback() {
   try {
-    const list = JSON.parse(localStorage.getItem('pb-feedback') || '[]');
+    const saved = localStorage.getItem(feedbackKey());
+    const raw = saved == null ? localStorage.getItem('pb-feedback') : saved;
+    const list = JSON.parse(raw || '[]');
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
+}
+
+function writeFeedback(items) {
+  localStorage.setItem(feedbackKey(), JSON.stringify(items.slice(0, 20)));
 }
 
 function renderFeedback() {
@@ -2746,7 +2756,18 @@ function renderFeedback() {
   const items = readFeedback();
   const empty = document.getElementById('feedbackEmpty');
   if (empty) empty.hidden = items.length > 0;
-  list.innerHTML = items.map((item) => `<li>${esc(item.text)}</li>`).join('');
+  list.hidden = items.length === 0;
+  list.innerHTML = items.map((item, index) => (
+    `<li><span>${esc(item.text)}</span><button type="button" data-note="${index}" aria-label="Delete note">Delete</button></li>`
+  )).join('');
+  list.querySelectorAll('[data-note]').forEach((btn) => {
+    btn.onclick = () => {
+      const next = readFeedback();
+      next.splice(Number(btn.dataset.note), 1);
+      writeFeedback(next);
+      renderFeedback();
+    };
+  });
 }
 
 function openFeedback() {
@@ -2977,12 +2998,17 @@ document.getElementById('prefSound').onclick = () => {
   writePrefs({ sound: !readPrefs().sound });
 };
 document.getElementById('prefTiny').onclick = () => {
-  writePrefs({ tiny: !readPrefs().tiny });
+  const tiny = !readPrefs().tiny;
+  writePrefs({ tiny });
+  const box = document.getElementById('tinyImgs');
+  if (box) box.checked = tiny;
+  if (activeJob && !document.getElementById('galleryView')?.classList.contains('hidden')) loadGallery(activeJob);
 };
 document.getElementById('prefPassword').onclick = () => {
   const form = document.getElementById('passForm');
-  form.hidden = false;
-  document.getElementById('passCurrent')?.focus();
+  const open = form.hidden;
+  form.hidden = !open;
+  if (open) document.getElementById('passCurrent')?.focus();
 };
 document.getElementById('passCancel').onclick = () => {
   const form = document.getElementById('passForm');
@@ -3003,6 +3029,8 @@ document.getElementById('passForm').addEventListener('submit', async (e) => {
   if (next !== confirm) { showError('Those new passwords do not match.'); return; }
   const yes = await confirmAsk({ title: 'Change password?', body: 'The next sign-in uses the new password.', ok: 'Change' });
   if (!yes) return;
+  const submit = e.target.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
   try {
     const session = await api('/api/auth/password', {
       method: 'POST',
@@ -3014,6 +3042,8 @@ document.getElementById('passForm').addEventListener('submit', async (e) => {
     toast('Password changed.');
   } catch (err) {
     showError(err.message || 'That password was not saved.');
+  } finally {
+    if (submit) submit.disabled = false;
   }
 });
 document.getElementById('prefSignOut').onclick = async () => {
@@ -3038,8 +3068,8 @@ function onThemeClick(e) {
 document.getElementById('settingsTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('accountTheme')?.addEventListener('click', onThemeClick);
 document.getElementById('acctSettings').onclick = () => showSettingsPanel('interface');
-document.getElementById('acctUpload').onclick = () => { closeSettingsPage(); openConnected(document.getElementById('homeNav')); };
-document.getElementById('captureUpload')?.addEventListener('click', () => { closeSettingsPage(); openConnected(document.getElementById('homeNav')); });
+document.getElementById('acctUpload').onclick = () => { closeSettingsPage(); pickFile('page'); };
+document.getElementById('captureUpload')?.addEventListener('click', () => { closeSettingsPage(); pickFile('page'); });
 document.getElementById('acctWidths').onclick = () => document.getElementById('prefResetWidths').click();
 document.getElementById('acctImages').onclick = () => {
   if (!activeJob) { toast('Open a capture first.'); return; }
@@ -3066,7 +3096,7 @@ document.getElementById('feedbackForm').addEventListener('submit', (e) => {
   if (!text) { toast('Write a note first.'); return; }
   const items = readFeedback();
   items.unshift({ text, at: new Date().toISOString() });
-  localStorage.setItem('pb-feedback', JSON.stringify(items.slice(0, 20)));
+  writeFeedback(items);
   if (box) box.value = '';
   renderFeedback();
   toast('Saved on this computer.');
@@ -3108,6 +3138,7 @@ document.getElementById('galleryBtn')?.addEventListener('click', () => {
   loadGallery(activeJob);
 });
 document.getElementById('tinyImgs').addEventListener('change', () => {
+  writePrefs({ tiny: !!document.getElementById('tinyImgs').checked });
   if (activeJob) loadGallery(activeJob);
 });
 document.getElementById('gallerySearch')?.addEventListener('input', (event) => {
