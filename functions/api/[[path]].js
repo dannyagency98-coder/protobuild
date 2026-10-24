@@ -296,7 +296,7 @@ async function handleAgent(request, env, user, waitUntil) {
     const queued = await queueCapture(env, user, { url, mode, rights_confirmed: true, options: captureOptions(message) }, waitUntil);
     const payload = await queued.json();
     if (!queued.ok) return sse({ reply: payload.error || 'That link was not copied.', job: null });
-    return sse({ reply: 'Previewing the screen.', job: publicJob(env, payload), pendingLine: true });
+    return sse({ reply: 'Scanning.', job: publicJob(env, payload), pendingLine: true });
   }
 
   if (jobId && /\b(share|live link|dev link)\b|\b(send|give|make)\b[^.]{0,40}\b(link|url)\b/i.test(message) && !wantsEdit(message)) {

@@ -259,8 +259,8 @@ function syncStageActions(job) {
   const box = document.getElementById('input');
   if (box) {
     box.placeholder = ready
-      ? `Describe what should change on ${name}.`
-      : (scanning ? `Opening ${name}.` : 'Describe what you want, or paste a site.');
+      ? `Edit ${name}.`
+      : (scanning ? `Scanning ${name}.` : 'Paste a site.');
   }
 }
 
@@ -1032,10 +1032,10 @@ function clearScanPresentation() {
     clock.textContent = '';
   }
   for (const box of stream?.querySelectorAll('.bubble') || []) {
-    if (/previewing the screen/i.test(box.textContent || '')) box.textContent = 'Stopped.';
+    if (/previewing the screen|^scanning/i.test(box.textContent || '')) box.textContent = 'Stopped.';
   }
   for (const item of thread) {
-    if (item.role === 'ai' && /previewing the screen/i.test(item.text || '')) item.text = 'Stopped.';
+    if (item.role === 'ai' && /previewing the screen|^scanning/i.test(item.text || '')) item.text = 'Stopped.';
   }
 }
 
@@ -1189,14 +1189,14 @@ function previewAddress(job, reload) {
 }
 
 function screenLabel() {
-  return screenMode === 'edit' ? 'Editing the screen' : 'Previewing the screen';
+  return screenMode === 'edit' ? 'Updating' : 'Scanning';
 }
 
 function progressLabel(job) {
-  if (screenMode === 'edit') return 'Editing the screen';
+  if (screenMode === 'edit') return 'Updating';
   const count = String(job?.phaseDetail || '').match(/(\d+)\s*\/\s*(\d+)/);
-  if (count && (job?.status === 'queued' || job?.status === 'running')) return `Previewing the screen · ${count[1]}/${count[2]}`;
-  return 'Previewing the screen';
+  if (count && (job?.status === 'queued' || job?.status === 'running')) return `Scanning · ${count[1]}/${count[2]}`;
+  return 'Scanning';
 }
 
 function paintStageEmpty(job) {
@@ -1210,7 +1210,7 @@ function paintStageEmpty(job) {
   if (steps) {
     steps.hidden = !(scanning || editing);
     const line = document.getElementById('captureLine');
-    if (line) line.textContent = scanning ? progressLabel(job) : (editing ? 'Editing the screen' : '');
+    if (line) line.textContent = scanning ? progressLabel(job) : (editing ? 'Updating' : '');
   }
   if (fail) {
     fail.hidden = !bad;
@@ -1393,7 +1393,7 @@ function scanText(job) {
     if (job?.phase === 'scrolling') return `Loading the rest of ${host}`;
     if (job?.phase === 'saving') return `Saving ${host}`;
     if (job?.phase === 'packaging') return 'Preparing the preview';
-    return `Opening ${host}`;
+    return `Scanning ${host}`;
   }
   return detail;
 }
@@ -1419,10 +1419,10 @@ function renderLive(box, job) {
 }
 
 function statusLine(job) {
-  if (job.status === 'done') return 'The page is on the phone. Share the dev link, download it, or describe a change.';
-  if (job.status === 'blocked') return cleanError(job.error) || 'This site blocked the scan. Attach a saved copy of the page.';
+  if (job.status === 'done') return 'Ready.';
+  if (job.status === 'blocked') return 'This site blocked the scan.';
   if (job.status === 'failed' && /stopped/i.test(job.error || '')) return 'Stopped.';
-  if (job.status === 'failed') return cleanError(job.error) || 'The scan did not finish. Try again, or attach a saved copy of the page.';
+  if (job.status === 'failed') return 'The scan did not finish.';
   return progressLabel(job);
 }
 
@@ -1617,7 +1617,7 @@ async function poll(id, box) {
     }
     if (job.status === 'done') {
       box.querySelector('.live')?.remove();
-      if (/previewing the screen/i.test(box.textContent || '') && !box.querySelector('.preview-card')) {
+      if (/previewing the screen|^scanning\.?$/i.test((box.textContent || '').trim()) && !box.querySelector('.preview-card')) {
         const line = statusLine(job);
         const last = [...thread].reverse().find((item) => item.role === 'ai');
         if (last) last.text = line;

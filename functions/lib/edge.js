@@ -63,6 +63,35 @@ export async function readStoredJob(env, jobId) {
   return obj.json().catch(() => null);
 }
 
+const BROWSER_LIMIT_KEY = 'browser-down-until';
+
+function nextUtcMidnight() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString();
+}
+
+function isBrowserLimit(err) {
+  return /limit exceeded|browser time|too many requests|quota|429/i.test(String(err?.message || err || ''));
+}
+
+async function browserDownUntil(env) {
+  if (!env.GEMINI_KV) return '';
+  const value = await env.GEMINI_KV.get(BROWSER_LIMIT_KEY);
+  if (!value) return '';
+  if (Date.parse(value) <= Date.now()) {
+    await env.GEMINI_KV.delete(BROWSER_LIMIT_KEY);
+    return '';
+  }
+  return value;
+}
+
+async function rememberBrowserDown(env) {
+  if (!env.GEMINI_KV) return;
+  const until = nextUtcMidnight();
+  const ttl = Math.max(60, Math.ceil((Date.parse(until) - Date.now()) / 1000));
+  await env.GEMINI_KV.put(BROWSER_LIMIT_KEY, until, { expirationTtl: ttl });
+}
+
 async function dispatchGithub(env, job) {
   if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return false;
   const workflow = env.GITHUB_WORKFLOW_FILE || 'capture.yml';
@@ -108,7 +137,7 @@ export async function queueCapture(env, user, body, waitUntil) {
     options: body.options || {},
     status: 'running',
     phase: 'opening',
-    phaseDetail: 'Previewing the screen',
+    phaseDetail: 'Scanning',
     error: null,
     stats: {},
     share_token: null,
@@ -119,7 +148,8 @@ export async function queueCapture(env, user, body, waitUntil) {
   };
   await putJob(env, created);
   await rememberJob(env, user.id, created.id);
-  if (canBrowser) {
+  const browserLimited = canBrowser ? await browserDownUntil(env) : '';
+  if (canBrowser && !browserLimited) {
     waitUntil((async () => {
       const finishSaved = async () => {
         const current = await readStoredJob(env, created.id);
@@ -131,7 +161,7 @@ export async function queueCapture(env, user, body, waitUntil) {
           ...(current || created),
           status: 'done',
           phase: 'packaging',
-          phaseDetail: 'Previewing the screen',
+          phaseDetail: 'Scanning',
           error: null,
           finished_at: new Date().toISOString(),
         });
@@ -139,13 +169,18 @@ export async function queueCapture(env, user, body, waitUntil) {
       };
       try {
         await captureInBrowser(env, created);
-      } catch {
+      } catch (err) {
+        if (isBrowserLimit(err)) await rememberBrowserDown(env);
         if (await finishSaved()) return;
-        try { await captureInBrowser(env, created); } catch { /* the second open can fail too */ }
+        if (!isBrowserLimit(err)) {
+          try { await captureInBrowser(env, created); } catch (again) {
+            if (isBrowserLimit(again)) await rememberBrowserDown(env);
+          }
+        }
         if (await finishSaved()) return;
         const queued = await dispatchGithub(env, created);
         if (queued) {
-          await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Previewing the screen' });
+          await putJob(env, { ...created, status: 'queued', phase: 'opening', phaseDetail: 'Scanning' });
           return;
         }
         await putJob(env, { ...created, status: 'failed', error: 'The page did not open.', finished_at: new Date().toISOString() });
@@ -155,8 +190,8 @@ export async function queueCapture(env, user, body, waitUntil) {
   }
   const queued = await dispatchGithub(env, created);
   if (!queued) {
-    await putJob(env, { ...created, status: 'failed', error: 'The capture workflow did not start.', finished_at: new Date().toISOString() });
-    return json({ error: 'The capture workflow did not start.' }, 502);
+    await putJob(env, { ...created, status: 'failed', error: 'The scan did not start.', finished_at: new Date().toISOString() });
+    return json({ error: 'The scan did not start.' }, 502);
   }
   await putJob(env, { ...created, status: 'queued' });
   return json({ ...created, status: 'queued' });
@@ -177,7 +212,7 @@ export async function storeHtmlPage(env, user, name, html) {
     options: {},
     status: 'done',
     phase: 'packaging',
-    phaseDetail: 'Previewing the screen',
+    phaseDetail: 'Scanning',
     error: null,
     stats: {},
     share_token: null,
@@ -241,8 +276,8 @@ export async function queueUpload(env, user, file) {
     }),
   });
   if (dispatched.status !== 204) {
-    await putJob(env, { ...created, status: 'failed', error: 'The capture workflow did not start.', finished_at: new Date().toISOString() });
-    return json({ error: 'The capture workflow did not start.' }, 502);
+    await putJob(env, { ...created, status: 'failed', error: 'The scan did not start.', finished_at: new Date().toISOString() });
+    return json({ error: 'The scan did not start.' }, 502);
   }
   return json(created);
 }

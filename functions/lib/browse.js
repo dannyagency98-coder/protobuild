@@ -99,16 +99,16 @@ async function settleImages(page) {
     });
     if (accept) {
       accept.click();
-      await wait(400);
+      await wait(150);
     }
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 2; i += 1) {
       window.scrollBy(0, window.innerHeight * 0.9);
-      await wait(220);
+      await wait(120);
     }
     window.scrollTo(0, 0);
     await Promise.race([
       document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve(),
-      wait(1200),
+      wait(400),
     ]);
     const pick = (srcset) => {
       let best = '';
@@ -226,9 +226,9 @@ async function collectFace(page) {
       }
     }
     return {
-      sheets: [...new Set(sheets)].slice(0, 8),
-      fonts: [...new Set(fonts)].slice(0, 16),
-      icons: [...new Set(icons)].slice(0, 12),
+      sheets: [...new Set(sheets)].slice(0, 4),
+      fonts: [...new Set(fonts)].slice(0, 6),
+      icons: [...new Set(icons)].slice(0, 6),
     };
   }).catch(() => ({ sheets: [], fonts: [], icons: [] }));
 }
@@ -242,13 +242,13 @@ async function mirrorAssets(env, job, html, urls, extras) {
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     unique.push(url);
-    if (unique.length >= 24) break;
+    if (unique.length >= 12) break;
   }
   const fontUrls = [];
   for (const url of extras?.fonts || []) {
     if (/^https?:\/\//i.test(url) && !seen.has(url)) fontUrls.push(url);
   }
-  const sheetUrls = (extras?.sheets || []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 8);
+  const sheetUrls = (extras?.sheets || []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 4);
   let totalCount = Math.max(1, unique.length + fontUrls.length + sheetUrls.length);
   let done = 0;
   let aborted = false;
@@ -258,8 +258,8 @@ async function mirrorAssets(env, job, html, urls, extras) {
     const ok = await saveJob(env, {
       ...job,
       status: 'running',
-      phase: 'saving',
-      phaseDetail: `Copying assets ${Math.min(done, totalCount)}/${totalCount}`,
+      phase: 'packaging',
+      phaseDetail: `Scanning · ${Math.min(done, totalCount)}/${totalCount}`,
     }).catch(() => false);
     if (!ok) aborted = true;
   };
@@ -276,7 +276,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
       try {
         const res = await fetch(url, {
           redirect: 'follow',
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(2500),
           headers: {
             'User-Agent': PHONE_UA,
             Referer: referer || url,
@@ -313,7 +313,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
     try {
       const res = await fetch(sheetUrl, {
         redirect: 'follow',
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(2500),
         headers: { 'User-Agent': PHONE_UA, Referer: referer || sheetUrl },
       });
       if (res.ok) {
@@ -325,8 +325,8 @@ async function mirrorAssets(env, job, html, urls, extras) {
           const isFont = /\.(woff2?|ttf|otf)(\?|$)/i.test(match[2]);
           const isIcon = /\.(svg|png|jpe?g|webp|gif|avif)(\?|$)/i.test(match[2]);
           if (!isFont && !isIcon) continue;
-          if (isFont && fontUrls.length >= 16) continue;
-          if (isIcon && cssAssets.length >= 12) continue;
+          if (isFont && fontUrls.length >= 6) continue;
+          if (isIcon && cssAssets.length >= 4) continue;
           try {
             const full = new URL(match[2], sheetUrl).href;
             if (isFont) {
@@ -354,7 +354,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
       try {
         const res = await fetch(url, {
           redirect: 'follow',
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(2500),
           headers: { 'User-Agent': PHONE_UA, Referer: referer || url },
         });
         if (!res.ok) continue;
@@ -381,7 +381,7 @@ async function mirrorAssets(env, job, html, urls, extras) {
       try {
         const res = await fetch(item.url, {
           redirect: 'follow',
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(2500),
           headers: { 'User-Agent': PHONE_UA, Referer: referer || item.url, Accept: 'image/avif,image/webp,image/*,*/*;q=0.8' },
         });
         if (!res.ok) continue;
@@ -441,9 +441,9 @@ export async function captureInBrowser(env, job) {
     if (!opened) await page.goto(job.source_url, { waitUntil: 'commit', timeout: 15000 }).catch(() => {});
     await page.evaluate(() => new Promise((resolve) => {
       const done = () => resolve();
-      if (document.readyState === 'complete') setTimeout(done, 800);
-      else window.addEventListener('load', () => setTimeout(done, 800), { once: true });
-      setTimeout(done, 6000);
+      if (document.readyState === 'complete') setTimeout(done, 300);
+      else window.addEventListener('load', () => setTimeout(done, 300), { once: true });
+      setTimeout(done, 2000);
     })).catch(() => {});
     const urls = await settleImages(page).catch(() => []);
     const extras = await collectFace(page).catch(() => ({ sheets: [], fonts: [], icons: [] }));
@@ -471,7 +471,7 @@ export async function captureInBrowser(env, job) {
       ...job,
       status: 'running',
       phase: 'packaging',
-      phaseDetail: 'Previewing the screen',
+      phaseDetail: 'Scanning',
     });
     if (!ready) return;
     files = [{ name: 'screenshots/phone.png', data: shot }];
@@ -479,7 +479,7 @@ export async function captureInBrowser(env, job) {
       try {
         const mirrored = await Promise.race([
           mirrorAssets(env, job, html, urls, extras),
-          new Promise((resolve) => setTimeout(() => resolve(null), 22000)),
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
         ]);
         if (mirrored && !mirrored.aborted && mirrored.html) {
           html = mirrored.html;
@@ -501,7 +501,7 @@ export async function captureInBrowser(env, job) {
       ...job,
       status: 'done',
       phase: 'packaging',
-      phaseDetail: 'Previewing the screen',
+      phaseDetail: 'Scanning',
       error: null,
       finished_at: new Date().toISOString(),
       stats: { images: images.length || (shot.length ? 1 : 0) },
